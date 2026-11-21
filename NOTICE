@@ -1,0 +1,27 @@
+DialPilot
+Copyright (c) 2026 lichengwu (DialPilot contributors)
+
+This product includes software developed as a fork of:
+
+  VibeKey Lite — https://github.com/arumwu/vibekey-lite
+  Copyright (c) 2026 VibeKey Lite contributors
+  Licensed under the MIT License.
+
+The original MIT license text is retained in LICENSE. Portions of this
+codebase derive from that upstream project; all modifications and new
+modules (agent-light engine, multi-session arbitration, hook installers,
+auto profile switching, QwenWork loopback listener, UI redesign) are
+Copyright (c) 2026 lichengwu.
+
+Agent event-to-state mapping tables were informed by the plaintext
+ustudio-cli hook sources distributed with Ulanzi Studio 3.3.6. Protocol
+facts were obtained by read-only static analysis and controlled device
+testing for interoperability. No vendor binary (kwdm.dylib, UlanziDeck,
+or any other) is contained, copied, loaded, linked, or redistributed.
+
+PERSONAL PROJECT — NON-COMMERCIAL INTENT.
+This is a personal hobby project. The author does not intend, support,
+or warrant commercial use. The MIT license is retained to honor upstream
+obligations; anyone contemplating commercial use should independently
+assess legal and trademark risks and contact upstream rights holders.
+This software is unofficial and not affiliated with or endorsed by Ulanzi.

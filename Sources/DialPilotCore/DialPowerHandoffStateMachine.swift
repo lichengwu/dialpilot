@@ -1,0 +1,147 @@
+import Foundation
+
+public enum DialPowerHandoffDecision: Equatable, Sendable {
+    /// Replace any previously scheduled handoff with this monotonic deadline.
+    case scheduleStandbyHandoff(deadline: TimeInterval)
+    case cancelStandbyHandoff
+    case handoffForStandby
+    case resumeOnline
+}
+
+public enum DialPowerHandoffMode: Equatable, Sendable {
+    case inactive
+    case online
+    case handedOffForStandby
+    case resumePending
+}
+
+public enum DialPowerHandoffSuspensionReason: Equatable, Sendable {
+    case manualNative
+    case onlinePrerequisiteLost
+}
+
+/// Pure policy for yielding online mode after inactivity and resuming it after
+/// the device wakes. The caller owns timers and HID transport side effects.
+public struct DialPowerHandoffStateMachine: Equatable, Sendable {
+    public private(set) var idleInterval: TimeInterval
+
+    public private(set) var mode: DialPowerHandoffMode = .inactive
+    public private(set) var handoffDeadline: TimeInterval?
+    public private(set) var suspensionReason: DialPowerHandoffSuspensionReason?
+
+    public init(idleInterval: TimeInterval) {
+        self.idleInterval = idleInterval.isFinite && idleInterval > 0
+            ? idleInterval
+            : 0
+    }
+
+    /// Call only after online mode has started successfully. This also clears a
+    /// previous manual/prerequisite suspension because the caller explicitly
+    /// confirmed that online operation is allowed again.
+    public mutating func onlineStarted(at timestamp: TimeInterval) -> [DialPowerHandoffDecision] {
+        mode = .online
+        suspensionReason = nil
+        return scheduleDeadline(after: timestamp)
+    }
+
+    /// Applies the device's saved standby delay without persisting anything.
+    /// If online, the new value replaces the current inactivity deadline.
+    public mutating func updateIdleInterval(
+        _ interval: TimeInterval,
+        at timestamp: TimeInterval
+    ) -> [DialPowerHandoffDecision] {
+        let normalizedInterval = interval.isFinite && interval > 0 ? interval : 0
+        // Re-reading an unchanged device setting is not physical activity and
+        // must not postpone the existing inactivity deadline.
+        guard normalizedInterval != idleInterval else { return [] }
+        idleInterval = normalizedInterval
+        guard mode == .online else { return [] }
+        if idleInterval == 0 {
+            let hadScheduledHandoff = handoffDeadline != nil
+            handoffDeadline = nil
+            return hadScheduledHandoff ? [.cancelStandbyHandoff] : []
+        }
+        return scheduleDeadline(after: timestamp)
+    }
+
+    /// Physical input while online restarts the inactivity window.
+    public mutating func deviceInput(at timestamp: TimeInterval) -> [DialPowerHandoffDecision] {
+        guard mode == .online else { return [] }
+        return scheduleDeadline(after: timestamp)
+    }
+
+    /// Stale timer callbacks are harmless: only the current deadline can cause
+    /// the automatic handoff.
+    public mutating func standbyHandoffDeadlineReached(
+        at timestamp: TimeInterval
+    ) -> [DialPowerHandoffDecision] {
+        guard mode == .online,
+              let handoffDeadline,
+              timestamp + 1e-9 >= handoffDeadline else {
+            return []
+        }
+
+        self.handoffDeadline = nil
+        mode = .handedOffForStandby
+        return [.handoffForStandby]
+    }
+
+    /// A positive wake notice means the controller is ready again. Resume
+    /// immediately so a controller that powered itself off does not remain in
+    /// native-only mode until the user happens to press a detectable shortcut.
+    /// Standard-HID input remains a fallback for firmware that omits notices.
+    public mutating func noticeReceived(
+        _ notice: DialDeviceNotice
+    ) -> [DialPowerHandoffDecision] {
+        guard mode == .handedOffForStandby else { return [] }
+        switch notice {
+        case .powerOn, .deviceActive(isActive: true), .standby(status: 0):
+            return beginResume()
+        case .deviceActive(isActive: false), .standby:
+            return []
+        }
+    }
+
+    /// The standard-HID path calls this only after the first native shortcut
+    /// has returned to a neutral report, so its release cannot be swallowed.
+    public mutating func wakeInputReceived() -> [DialPowerHandoffDecision] {
+        guard mode == .handedOffForStandby else { return [] }
+        return beginResume()
+    }
+
+    /// Manual native mode and lost online prerequisites are authoritative.
+    /// Device notices and standard-HID input remain ignored until the caller
+    /// explicitly reports a later successful `onlineStarted` transition.
+    public mutating func suspendAutomaticResume(
+        reason: DialPowerHandoffSuspensionReason
+    ) -> [DialPowerHandoffDecision] {
+        let hadScheduledHandoff = handoffDeadline != nil
+        handoffDeadline = nil
+        mode = .inactive
+        suspensionReason = reason
+        return hadScheduledHandoff ? [.cancelStandbyHandoff] : []
+    }
+
+    private mutating func scheduleDeadline(
+        after timestamp: TimeInterval
+    ) -> [DialPowerHandoffDecision] {
+        guard idleInterval > 0, timestamp.isFinite else {
+            handoffDeadline = nil
+            return []
+        }
+
+        let deadline = timestamp + idleInterval
+        guard deadline.isFinite else {
+            handoffDeadline = nil
+            return []
+        }
+
+        handoffDeadline = deadline
+        return [.scheduleStandbyHandoff(deadline: deadline)]
+    }
+
+    private mutating func beginResume() -> [DialPowerHandoffDecision] {
+        mode = .resumePending
+        return [.resumeOnline]
+    }
+}
