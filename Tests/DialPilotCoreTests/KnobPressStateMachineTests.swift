@@ -3,12 +3,9 @@ import XCTest
 
 final class KnobPressStateMachineTests: XCTestCase {
     func testSinglePressWaitsUntilDoubleClickWindowCloses() {
-        var machine = KnobPressStateMachine(
-            longPressThreshold: 0.65,
-            doublePressInterval: 0.28
-        )
+        var machine = KnobPressStateMachine(doublePressInterval: 0.28)
 
-        XCTAssertEqual(machine.pressDown(at: 10), [.scheduleLongPress(after: 0.65)])
+        XCTAssertEqual(machine.pressDown(at: 10), [])
         XCTAssertEqual(machine.pressUp(at: 10.1), [.scheduleSinglePress(after: 0.28)])
         XCTAssertEqual(machine.singlePressTimerFired(), .performSinglePress)
         XCTAssertNil(machine.singlePressTimerFired())
@@ -19,10 +16,7 @@ final class KnobPressStateMachineTests: XCTestCase {
 
         _ = machine.pressDown(at: 20)
         _ = machine.pressUp(at: 20.08)
-        XCTAssertEqual(machine.pressDown(at: 20.20), [
-            .cancelPendingSinglePress,
-            .scheduleLongPress(after: 0.65)
-        ])
+        XCTAssertEqual(machine.pressDown(at: 20.20), [.cancelPendingSinglePress])
         XCTAssertNil(machine.singlePressTimerFired())
         XCTAssertEqual(machine.pressUp(at: 20.27), [
             .cancelPendingSinglePress,
@@ -30,28 +24,14 @@ final class KnobPressStateMachineTests: XCTestCase {
         ])
     }
 
-    func testLongPressWaitsForReleaseThenSwitches() {
+    func testLongHoldIsJustASinglePressOnRelease() {
+        // No long-press gesture. A hold longer than the double-click
+        // window releases as an ordinary single press (scheduled), never
+        // a profile switch.
         var machine = KnobPressStateMachine()
-
         _ = machine.pressDown(at: 30)
-        XCTAssertEqual(machine.longPressTimerFired(), [
-            .cancelPendingSinglePress,
-            .longPressRecognized
-        ])
-        XCTAssertEqual(machine.longPressTimerFired(), [])
-        XCTAssertEqual(machine.pressUp(at: 31), [
-            .cancelPendingSinglePress,
-            .switchProfile
-        ])
-    }
-
-    func testLateReleaseStillCountsAsLongPress() {
-        var machine = KnobPressStateMachine()
-        _ = machine.pressDown(at: 40)
-        XCTAssertEqual(machine.pressUp(at: 40.8), [
-            .cancelPendingSinglePress,
-            .switchProfile
-        ])
+        XCTAssertEqual(machine.pressUp(at: 31), [.scheduleSinglePress(after: 0.28)])
+        XCTAssertEqual(machine.singlePressTimerFired(), .performSinglePress)
     }
 
     func testPressAfterExpiredWindowFlushesFirstSingle() {
@@ -61,33 +41,14 @@ final class KnobPressStateMachineTests: XCTestCase {
 
         XCTAssertEqual(machine.pressDown(at: 50.5), [
             .cancelPendingSinglePress,
-            .performSinglePress,
-            .scheduleLongPress(after: 0.65)
-        ])
-    }
-
-    func testShortFirstPressThenLongSecondPressOnlySwitchesOnRelease() {
-        var machine = KnobPressStateMachine()
-        _ = machine.pressDown(at: 60)
-        _ = machine.pressUp(at: 60.08)
-        XCTAssertEqual(machine.pressDown(at: 60.20), [
-            .cancelPendingSinglePress,
-            .scheduleLongPress(after: 0.65)
-        ])
-        XCTAssertEqual(machine.longPressTimerFired(), [
-            .cancelPendingSinglePress,
-            .longPressRecognized
-        ])
-        XCTAssertEqual(machine.pressUp(at: 61), [
-            .cancelPendingSinglePress,
-            .switchProfile
+            .performSinglePress
         ])
     }
 
     func testRepeatDownStrayUpAndResetAreSafe() {
         var machine = KnobPressStateMachine()
         XCTAssertEqual(machine.pressUp(at: 1), [])
-        XCTAssertFalse(machine.pressDown(at: 2).isEmpty)
+        XCTAssertEqual(machine.pressDown(at: 2), [])
         XCTAssertEqual(machine.pressDown(at: 2.1), [])
         machine.reset()
         XCTAssertNil(machine.singlePressTimerFired())

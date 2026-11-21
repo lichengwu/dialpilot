@@ -198,7 +198,6 @@ final class NativeShortcutTests: XCTestCase {
     func testNoneAndUnsupportedActionsRemainDistinct() {
         XCTAssertEqual(PresetNativeShortcutResolver.resolve(.none), .none)
         XCTAssertEqual(PresetNativeShortcutResolver.resolve(.fnDoubleTap), .unsupported)
-        XCTAssertEqual(PresetNativeShortcutResolver.resolve(.switchProfile), .unsupported)
         XCTAssertEqual(PresetNativeShortcutResolver.resolve(.brightnessUp), .unsupported)
         XCTAssertEqual(PresetNativeShortcutResolver.resolve(.brightnessDown), .unsupported)
     }

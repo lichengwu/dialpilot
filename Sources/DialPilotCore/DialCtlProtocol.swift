@@ -34,14 +34,34 @@ public enum DialCtlProtocol {
     }
 
     public struct Response: Codable, Equatable, Sendable {
+        /// One active agent session in a `status` response.
+        public struct SessionDetail: Codable, Equatable, Sendable {
+            public var id: String
+            public var agent: String?
+            public var state: String
+            public var ageSeconds: Int
+            public var winning: Bool
+
+            public init(id: String, agent: String?, state: String, ageSeconds: Int, winning: Bool) {
+                self.id = id
+                self.agent = agent
+                self.state = state
+                self.ageSeconds = ageSeconds
+                self.winning = winning
+            }
+        }
+
         public var ok: Bool
         public var error: String?
         public var state: String?
+        /// Active sessions behind the single LED state (status command).
+        public var sessions: [SessionDetail]?
 
-        public init(ok: Bool, error: String? = nil, state: String? = nil) {
+        public init(ok: Bool, error: String? = nil, state: String? = nil, sessions: [SessionDetail]? = nil) {
             self.ok = ok
             self.error = error
             self.state = state
+            self.sessions = sessions
         }
     }
 

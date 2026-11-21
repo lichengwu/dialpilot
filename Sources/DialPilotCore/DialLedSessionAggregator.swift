@@ -17,11 +17,25 @@ public struct DialLedSessionAggregator: Equatable, Sendable {
     public struct Session: Equatable, Sendable {
         public var state: DialAgentState
         public var lastSeen: TimeInterval
+        /// Which agent owns this session (raw DialAgentTarget value or a
+        /// free-form source like "qwenwork"). nil for legacy/manual events.
+        public var agent: String?
 
-        public init(state: DialAgentState, lastSeen: TimeInterval) {
+        public init(state: DialAgentState, lastSeen: TimeInterval, agent: String? = nil) {
             self.state = state
             self.lastSeen = lastSeen
+            self.agent = agent
         }
+    }
+
+    /// One active session as shown in the panel / ctl status detail.
+    public struct SessionInfo: Equatable, Sendable {
+        public let id: String
+        public let agent: String?
+        public let state: DialAgentState
+        public let ageSeconds: TimeInterval
+        /// True when this session's state is the one on the device LEDs.
+        public let isWinning: Bool
     }
 
     public private(set) var sessions: [String: Session] = [:]
@@ -35,9 +49,13 @@ public struct DialLedSessionAggregator: Equatable, Sendable {
     public mutating func record(
         session: String,
         state: DialAgentState,
-        now: TimeInterval
+        now: TimeInterval,
+        agent: String? = nil
     ) -> DialAgentState {
-        sessions[session] = Session(state: state, lastSeen: now)
+        var entry = Session(state: state, lastSeen: now, agent: agent)
+        // Keep the first-known agent if a later event omits it.
+        if agent == nil { entry.agent = sessions[session]?.agent }
+        sessions[session] = entry
         return resolvedState(now: now)
     }
 
@@ -48,11 +66,45 @@ public struct DialLedSessionAggregator: Equatable, Sendable {
     }
 
     public func resolvedState(now: TimeInterval) -> DialAgentState {
-        let active = sessions.values.filter { now - $0.lastSeen < staleInterval }
-        guard let winner = active.max(by: { $0.state.priority < $1.state.priority }) else {
-            return .idle
-        }
-        return winner.state
+        winningSession(now: now)?.session.state ?? .idle
+    }
+
+    /// The session whose state is currently on the LEDs: highest priority
+    /// among non-stale sessions; ties break on most-recent event, then on
+    /// session id so the choice is deterministic.
+    public func winningSession(now: TimeInterval) -> (id: String, session: Session)? {
+        let active = sessions.filter { now - $0.value.lastSeen < staleInterval }
+        return active.max { a, b in
+            if a.value.state.priority != b.value.state.priority {
+                return a.value.state.priority < b.value.state.priority
+            }
+            if a.value.lastSeen != b.value.lastSeen {
+                return a.value.lastSeen < b.value.lastSeen
+            }
+            return a.key > b.key
+        }.map { (id: $0.key, session: $0.value) }
+    }
+
+    /// All non-stale sessions, winning one first, then by priority.
+    /// This is the "who else is running" detail behind the single LED state.
+    public func activeSessions(now: TimeInterval) -> [SessionInfo] {
+        let winnerID = winningSession(now: now)?.id
+        return sessions
+            .filter { now - $0.value.lastSeen < staleInterval }
+            .map { id, session in
+                SessionInfo(
+                    id: id,
+                    agent: session.agent,
+                    state: session.state,
+                    ageSeconds: max(0, now - session.lastSeen),
+                    isWinning: id == winnerID
+                )
+            }
+            .sorted { a, b in
+                if a.isWinning != b.isWinning { return a.isWinning }
+                if a.state.priority != b.state.priority { return a.state.priority > b.state.priority }
+                return a.ageSeconds < b.ageSeconds
+            }
     }
 
     public var activeSessionCount: Int { sessions.count }

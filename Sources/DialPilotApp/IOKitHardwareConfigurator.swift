@@ -11,19 +11,21 @@ enum IOKitHardwareConfiguratorError: LocalizedError {
     case unsupportedAction(control: InputControl, actionName: String)
 
     var errorDescription: String? {
+        let zh = L10n.language == .chinese
+        let close = zh ? "）。" : ")."
         switch self {
         case let .managerOpenFailed(code):
-            "无法开启 HID 管理器（\(Self.hex(code))）。"
+            return L10n.text(.errManagerOpen) + Self.hex(code) + close
         case .deviceNotFound:
-            "找不到 Dial（VID 0xFFF1、PID 0x00DD、usagePage 0xFFFC、usage 1）。"
+            return L10n.text(.errDeviceNotFound)
         case let .deviceOpenFailed(code):
-            "找到 Dial，但无法开启 custom HID 介面（\(Self.hex(code))）。"
+            return L10n.text(.errDeviceOpen) + Self.hex(code) + close
         case let .offlineWriteFailed(code):
-            "AU05 无法确认回到原生模式（\(Self.hex(code))）。"
+            return L10n.text(.errOfflineWrite) + Self.hex(code) + close
         case let .reportWriteFailed(index, code):
-            "写入硬件动作 index \(index) 失败（\(Self.hex(code))）。"
+            return L10n.text(.errReportWrite) + "\(index)" + (zh ? " 失败（" : " failed (") + Self.hex(code) + close
         case let .unsupportedAction(control, actionName):
-            "\(control.displayName) 的「\(actionName)」无法由 AU05 离线执行。"
+            return control.displayName + (zh ? " 的「" : ": ") + actionName + (zh ? "」" : "") + L10n.text(.errUnsupportedAction)
         }
     }
 
@@ -147,7 +149,7 @@ final class IOKitHardwareConfigurator: HardwareConfigurator {
 
         switch nativeAction {
         case .none:
-            let emptyShortcut = try NativeShortcut(entries: [], displayName: "不做事")
+            let emptyShortcut = try NativeShortcut(entries: [], displayName: L10n.text(.doNothing))
             return try DialPacketCodec.shortcutReport(
                 index: assignment.index,
                 shortcut: emptyShortcut

@@ -58,11 +58,9 @@ public enum DialAcceptanceHarness {
             Step(id: "B3", kind: .automatic, title: "QwenWork 仲裁：notification 压 working + 120s 过期"),
             Step(id: "B4", kind: .manual, title: "QwenWork 安装→后台粘贴→真机事件到灯",
                  instruction: "人工操作：App 内点 QwenWork 安装→复制配置→企业管理后台粘贴 7 事件→在千问办公跑一轮任务看灯；完成后点卸载并清空后台规则"),
-            // --- C. M1 auto profile switching regression ---
-            Step(id: "C1", kind: .automatic, title: "M1 映射命中切换/未命中不动/防重（纯逻辑）"),
-            Step(id: "C2", kind: .automatic, title: "M1 防抖风暴只留最后 + persist 失败回滚"),
-            Step(id: "C3", kind: .manual, title: "M1 真机按键回归",
-                 instruction: "人工操作：配置 appProfileMapping 后切换前台 App，按旋钮/三键确认动作随 profile 变化；⌘Tab 快速切换不连环切组"),
+            // --- C. Single-profile key regression (auto-switch removed) ---
+            Step(id: "C3", kind: .manual, title: "真机按键回归（单组）",
+                 instruction: "人工操作：按旋钮单按/双按与三键，确认动作与面板设置一致；旋钮双按默认不做事，可在面板改绑"),
             // --- D. Hygiene ---
             Step(id: "D1", kind: .automatic, title: "shutdown 恢复出厂基线帧"),
             Step(id: "D2", kind: .manual, title: "收尾确认",
@@ -262,30 +260,7 @@ public enum DialAcceptanceHarness {
             record("B3", b3OK, b3OK ? "notification 优先 + 120s 全过期回 idle" : "仲裁组合不符")
         }
 
-        // C1-C2 M1 pure logic
-        do {
-            let mapping = ["com.test.ai": ProfileID.a, "com.test.sys": ProfileID.b]
-            let hit = DialAppProfileSwitcher.targetProfile(
-                frontmostBundleID: "com.test.sys", mapping: mapping, currentProfile: .a) == .b
-            let miss = DialAppProfileSwitcher.targetProfile(
-                frontmostBundleID: "com.test.other", mapping: mapping, currentProfile: .a) == nil
-            let dedup = DialAppProfileSwitcher.targetProfile(
-                frontmostBundleID: "com.test.ai", mapping: mapping, currentProfile: .a) == nil
-            record("C1", hit && miss && dedup,
-                   hit && miss && dedup ? "命中切换/未命中不动/防重" : "M1 决策不符")
-
-            var debouncer = DialAppActivationDebouncer()
-            let t1 = debouncer.activate("com.test.a")
-            let t2 = debouncer.activate("com.test.b")
-            let stormOK = debouncer.fire(generation: t1) == nil
-                && debouncer.fire(generation: t2) == "com.test.b"
-            var persisted: [ProfileID] = []
-            let rollback = DialAppProfileSwitcher.applySwitch(target: .b, currentProfile: .a) {
-                persisted.append($0); return false
-            } == .a
-            record("C2", stormOK && rollback && persisted == [.b],
-                   stormOK && rollback ? "防抖留最后 + 失败回滚" : "防抖/回滚不符")
-        }
+        // C1-C2 removed together with the auto-switch feature (single profile).
 
         // D1 shutdown baseline
         do {

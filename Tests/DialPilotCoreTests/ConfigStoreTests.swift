@@ -32,65 +32,66 @@ final class ConfigStoreTests: XCTestCase {
         XCTAssertNil(configuration.offlineProfile)
         XCTAssertEqual(configuration[.a][.knobLeft], .preset(.downArrow))
         XCTAssertEqual(configuration[.a][.knobPress], .preset(.selectAll))
-        XCTAssertEqual(configuration[.a][.knobDoublePress], .preset(.switchProfile))
-        XCTAssertEqual(configuration[.b][.knobRight], .preset(.volumeUp))
+        // Single profile: double-press defaults to "do nothing".
+        XCTAssertEqual(configuration[.a][.knobDoublePress], .preset(.none))
 
         let json = try JSONSerialization.jsonObject(with: Data(contentsOf: configURL))
         let dictionary = try XCTUnwrap(json as? [String: Any])
         XCTAssertNotNil(dictionary["profileA"] as? [String: Any])
-        XCTAssertNotNil(dictionary["profileB"] as? [String: Any])
     }
 
-    func testDefaultProfilesMatchAIAndSystemLayout() {
+    func testDefaultProfileMatchesAILayout() {
         let configuration = AppConfiguration.default
 
         XCTAssertEqual(configuration[.a][.knobLeft], .preset(.downArrow))
         XCTAssertEqual(configuration[.a][.knobPress], .preset(.selectAll))
-        XCTAssertEqual(configuration[.a][.knobDoublePress], .preset(.switchProfile))
+        XCTAssertEqual(configuration[.a][.knobDoublePress], .preset(.none))
         XCTAssertEqual(configuration[.a][.knobRight], .preset(.upArrow))
         XCTAssertEqual(configuration[.a][.topButton], .preset(.optionKey))
         XCTAssertEqual(configuration[.a][.middleButton], .preset(.returnKey))
         XCTAssertEqual(configuration[.a][.bottomButton], .preset(.tab))
         XCTAssertTrue(configuration.needsHardwareSync)
         XCTAssertNil(configuration.offlineProfile)
-
-        XCTAssertEqual(configuration[.b][.knobLeft], .preset(.volumeDown))
-        XCTAssertEqual(configuration[.b][.knobPress], .preset(.appSwitcher))
-        XCTAssertEqual(configuration[.b][.knobDoublePress], .preset(.switchProfile))
-        XCTAssertEqual(configuration[.b][.knobRight], .preset(.volumeUp))
-        XCTAssertEqual(configuration[.b][.topButton], .preset(.playPause))
-        XCTAssertEqual(configuration[.b][.middleButton], .preset(.mute))
-        XCTAssertEqual(configuration[.b][.bottomButton], .preset(.appSwitcher))
-        XCTAssertEqual(ProfileID.a.displayName, "AI")
-        XCTAssertEqual(ProfileID.b.displayName, "系统")
+        XCTAssertEqual(configuration.activeProfile, .a)
+        XCTAssertTrue(configuration.appProfileMapping.isEmpty)
     }
 
-    func testRestoresLegacyReservedKnobInBothProfiles() {
+    func testMigrationPullsActiveProfileBackToAAndClearsMapping() {
         var configuration = AppConfiguration.default
-        configuration.profileA[.knobPress] = .preset(.switchProfile)
-        configuration.profileB[.knobPress] = .preset(.switchProfile)
+        configuration.activeProfile = .b
+        configuration.appProfileMapping = ["com.example.app": .b]
         configuration.offlineProfile = .b
 
         XCTAssertTrue(configuration.restoreLegacyReservedKnobMappings())
-        XCTAssertEqual(configuration.profileA[.knobPress], .preset(.selectAll))
-        XCTAssertEqual(configuration.profileB[.knobPress], .preset(.appSwitcher))
+        XCTAssertEqual(configuration.activeProfile, .a)
+        XCTAssertTrue(configuration.appProfileMapping.isEmpty)
         XCTAssertNil(configuration.offlineProfile)
         XCTAssertFalse(configuration.restoreLegacyReservedKnobMappings())
     }
 
-    func testRoundTripsCustomizedProfiles() throws {
+    func testRemovedSwitchProfileActionDecodesAsNone() throws {
+        // Old configs bound knobDoublePress to "switchProfile". The action
+        // no longer exists; the slot must degrade to .none, not crash.
+        let json = """
+        {
+          "activeProfile": "a",
+          "profileA": { "knobDoublePress": "switchProfile", "knobPress": "selectAll" },
+          "profileB": {}
+        }
+        """
+        let decoded = try JSONDecoder().decode(AppConfiguration.self, from: Data(json.utf8))
+        XCTAssertEqual(decoded[.a][.knobDoublePress], .preset(.none))
+        XCTAssertEqual(decoded[.a][.knobPress], .preset(.selectAll))
+    }
+
+    func testRoundTripsCustomizedProfile() throws {
         let configURL = temporaryDirectory.appendingPathComponent("nested/config.json")
         let store = ConfigStore(configURL: configURL, legacyConfigURL: temporaryDirectory.appendingPathComponent("no-legacy.json"))
         var expected = AppConfiguration.default
-        expected.activeProfile = .b
         var profileA = expected[.a]
-        var profileB = expected[.b]
         profileA[.topButton] = .preset(.f1)
         profileA[.middleButton] = .preset(.fnDoubleTap)
-        profileB[.middleButton] = .preset(.f12)
-        profileB[.topButton] = .preset(.fnDoubleTap)
         expected[.a] = profileA
-        expected[.b] = profileB
 
         try store.save(expected)
         let actual = try store.loadOrCreate()
@@ -110,7 +111,7 @@ final class ConfigStoreTests: XCTestCase {
 
         XCTAssertEqual(decoded[.a][.knobLeft], .preset(.leftArrow))
         XCTAssertEqual(decoded[.a][.knobRight], .preset(.none))
-        XCTAssertEqual(decoded[.a][.knobDoublePress], .preset(.switchProfile))
+        XCTAssertEqual(decoded[.a][.knobDoublePress], .preset(.none))
         XCTAssertEqual(decoded[.b][.topButton], .preset(.none))
         XCTAssertTrue(decoded.needsHardwareSync)
     }
@@ -131,7 +132,7 @@ final class ConfigStoreTests: XCTestCase {
     func testMissingOfflineProfileForcesHardwareSync() throws {
         let json = """
         {
-          "activeProfile": "b",
+          "activeProfile": "a",
           "profileA": {},
           "profileB": {},
           "needsHardwareSync": false
@@ -177,18 +178,15 @@ final class ConfigStoreTests: XCTestCase {
         let configURL = temporaryDirectory.appendingPathComponent("config.json")
         let legacyURL = temporaryDirectory.appendingPathComponent("legacy.json")
         var legacy = AppConfiguration.default
-        legacy.activeProfile = .b
-        legacy.offlineProfile = .b
+        legacy.offlineProfile = .a
         legacy.needsHardwareSync = false
-        legacy.appProfileMapping = ["com.example.app": .a]
         try JSONEncoder().encode(legacy).write(to: legacyURL)
 
         let store = ConfigStore(configURL: configURL, legacyConfigURL: legacyURL)
         let loaded = try store.loadOrCreate()
 
-        XCTAssertEqual(loaded.activeProfile, .b)
-        XCTAssertEqual(loaded.offlineProfile, .b)
-        XCTAssertEqual(loaded.appProfileMapping, ["com.example.app": .a])
+        XCTAssertEqual(loaded.activeProfile, .a)
+        XCTAssertEqual(loaded.offlineProfile, .a)
         // Migrated config is persisted at the new location.
         XCTAssertTrue(FileManager.default.fileExists(atPath: configURL.path))
         // Legacy file is left untouched as a fallback.
@@ -196,7 +194,7 @@ final class ConfigStoreTests: XCTestCase {
         // Second launch reads the new location, not the legacy one.
         try Data().write(to: legacyURL.appendingPathExtension("x"))
         let second = try ConfigStore(configURL: configURL, legacyConfigURL: legacyURL).loadOrCreate()
-        XCTAssertEqual(second.activeProfile, .b)
+        XCTAssertEqual(second.activeProfile, .a)
     }
 
     func testNoLegacyConfigCreatesDefaults() throws {

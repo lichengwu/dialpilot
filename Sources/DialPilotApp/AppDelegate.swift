@@ -8,21 +8,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var configuration = AppConfiguration.default
     private var configStore: ConfigStore?
     private var statusItem: NSStatusItem?
-    private var popover: NSPopover?
+    private var panelController: DialPanelController?
     private var settingsViewController: SettingsViewController?
     private var hardwareListener: IOKitHardwareListener?
     private var ledRenderer: LedRenderer?
     private var ctlServer: CtlSocketServer?
     private var agentHooksWindowController: AgentHooksWindowController?
+    private var guideWindowController: GuideWindowController?
     private var qwenWorkListener: QwenWorkHookListener?
     private var ledSessionAggregator = DialLedSessionAggregator()
     private var ledStaleTimer: Timer?
-    private var appProfileDebounceWorkItem: DispatchWorkItem?
-    private var appActivationDebouncer = DialAppActivationDebouncer()
+    private var autoSyncWorkItem: DispatchWorkItem?
     private var workspaceObservers: [NSObjectProtocol] = []
     private let actionPerformer = ActionPerformer()
     private var knobPressStateMachine = KnobPressStateMachine()
-    private var knobLongPressTimer: Timer?
     private var knobSinglePressTimer: Timer?
     private var powerHandoffTimer: Timer?
     private var connectionRecoveryTimer: Timer?
@@ -36,15 +35,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var listenerActive = false
     private var accessibilityGranted = false
     private var deviceConnected = false
+    /// False when the USB interface is enumerated but the knob never answers
+    /// (switched off, cable only charging). See `DialDeviceLiveness`.
+    private var deviceResponsive = true
     private var devicePowerStatus = DialPowerSnapshot()
     private var powerSaving = false
     private var hardwareSyncInProgress = false
     private var vendorInterferedDuringHardwareSync = false
     private var needsHardwareSync = false
     private var configurationReady = false
-    private var enhancedModeRequested = true
     private var offlineStateUnconfirmed = false
     private var notice: String?
+
+    // Usage statistics: local counters, debounced persistence. Never
+    // blocks input handling; a failed save just retries on next event.
+    private var usageStats = DialUsageStats()
+    private var usageStatsURL: URL?
+    private var usageSaveWorkItem: DispatchWorkItem?
+    private var appearanceObserver: NSObjectProtocol?
 
     override init() {
         hardwareConfigurator = IOKitHardwareConfigurator()
@@ -58,33 +66,51 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         loadConfiguration()
-        DebugLog.log("launch: offlineProfile=\(configuration.offlineProfile?.rawValue ?? "nil") needsHardwareSync=\(needsHardwareSync) activeProfile=\(configuration.activeProfile.rawValue)")
-        configureStatusItemAndPopover()
+        loadUsageStats()
+        DebugLog.log("launch: offlineProfile=\(configuration.offlineProfile?.rawValue ?? "nil") needsHardwareSync=\(needsHardwareSync)")
+        configureStatusItemAndPanel()
         configureHardwareListener()
         configureLedRendering()
         configureLifecycleObservers()
-        // M1: align the profile with whatever app is already frontmost at launch.
-        applyAppProfileSwitch(
-            bundleID: NSWorkspace.shared.frontmostApplication?.bundleIdentifier
-        )
+        enableLaunchAtLoginByDefault()
+        observeMenuBarAppearance()
         refreshUI()
 
+        // The six-key backup writes itself. No button, no confirmation —
+        // the complexity stays on this side. If the device is not here yet,
+        // the connect handler retries once it appears.
         if needsHardwareSync {
-            notice = "请按「写入设备」确认写回完整六键；确认前不会改动 AU05。"
-            refreshUI()
-        } else {
-            startHardwareListener(promptForPermission: true)
-            scheduleConnectionRecovery()
+            scheduleAutoSync(delay: 1.0)
         }
+        startHardwareListener(promptForPermission: true)
+        scheduleConnectionRecovery()
 
         if ProcessInfo.processInfo.environment["DIALPILOT_SHOW_SETTINGS"] == "1" {
             DispatchQueue.main.async { [weak self] in
-                self?.showPopover()
+                self?.showPanel()
             }
         }
     }
 
+    /// Launch at login is on by default — a menu-bar companion that is not
+    /// running is a dead dial. Registered once; if the user later removes
+    /// it from System Settings we do not fight them (only register when
+    /// status is .notRegistered, never re-enable after .disabled).
+    private func enableLaunchAtLoginByDefault() {
+        let service = SMAppService.mainApp
+        guard service.status == .notRegistered else { return }
+        do {
+            try service.register()
+        } catch {
+            logger.error("Launch-at-login default registration failed: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
+        flushUsageStats()
+        if let appearanceObserver {
+            DistributedNotificationCenter.default().removeObserver(appearanceObserver)
+        }
         let notificationCenter = NSWorkspace.shared.notificationCenter
         workspaceObservers.forEach(notificationCenter.removeObserver)
         workspaceObservers.removeAll()
@@ -108,10 +134,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        guard hardwareSyncInProgress else { return .terminateNow }
-        notice = "AU05 写入中；完成后再退出 App。"
-        refreshUI()
-        return .terminateCancel
+        if hardwareSyncInProgress {
+            notice = L10n.text(.noticeWritingQuit)
+            refreshUI()
+            return .terminateCancel
+        }
+        // Give the LED baseline restore a chance to land before the process
+        // dies. shutdown() writes asynchronously (per-frame ACK, 2 s timeout
+        // each); terminating immediately used to race it and could leave the
+        // last agent pattern lit. Reply later once the write settles, with a
+        // 3 s cap so a hung device can never block quitting.
+        guard let renderer = ledRenderer else { return .terminateNow }
+        ledRenderer = nil
+        var replied = false
+        let reply: (NSApplication.TerminateReply) -> Void = { reply in
+            guard !replied else { return }
+            replied = true
+            NSApp.reply(toApplicationShouldTerminate: reply == .terminateNow)
+        }
+        renderer.shutdown {
+            DispatchQueue.main.async { reply(.terminateNow) }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) { reply(.terminateNow) }
+        return .terminateLater
     }
 
     // MARK: - LED rendering + ctl socket
@@ -136,9 +181,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             agentHooksWindowController = controller
         }
+        // The panel floats at status-bar level; leaving it up would cover
+        // the window this button just opened.
+        panelController?.dismiss(reason: "agent-hooks")
         agentHooksWindowController?.showWindow(nil)
         agentHooksWindowController?.window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+    }
+
+    /// Raycast-style full-screen light guide: swipe / arrow keys to move,
+    /// click or Esc to dismiss. A separate window, not an inline strip —
+    /// the panel never changes height, so the blank-gap bug is gone by
+    /// construction.
+    private func showGuideWindow() {
+        if guideWindowController == nil {
+            guideWindowController = GuideWindowController()
+        }
+        panelController?.dismiss(reason: "guide")
+        guideWindowController?.present()
     }
 
     /// Starts the loopback listener on demand (install flow only; never at
@@ -150,9 +210,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let listener = QwenWorkHookListener { [weak self] state in
             guard let self, let renderer = self.ledRenderer else { return }
             let resolved = self.ledSessionAggregator.record(
-                session: "qwenwork", state: state, now: Date().timeIntervalSince1970
+                session: "qwenwork", state: state, now: Date().timeIntervalSince1970,
+                agent: "qwenwork"
             )
             renderer.request(resolved)
+            self.refreshUI()
         }
         do {
             try listener.start()
@@ -182,17 +244,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         )
         ledRenderer = renderer
+        applyLightMode(configuration.lightMode)
         let staleTimer = Timer(timeInterval: 30, repeats: true) { [weak self] _ in
             guard let self, let renderer = self.ledRenderer else { return }
+            let before = self.ledSessionAggregator.activeSessionCount
             let resolved = self.ledSessionAggregator.prune(now: Date().timeIntervalSince1970)
             if resolved != renderer.state {
                 renderer.request(resolved)
+            }
+            // Session count changed (a stale one dropped): refresh the
+            // panel's "who is on the LEDs" row even if the state is same.
+            if before != self.ledSessionAggregator.activeSessionCount {
+                self.refreshUI()
             }
         }
         RunLoop.main.add(staleTimer, forMode: .common)
         ledStaleTimer = staleTimer
         let server = CtlSocketServer { [weak self] request in
-            self?.handleCtlRequest(request) ?? .init(ok: false, error: "App 未就绪")
+            self?.handleCtlRequest(request) ?? .init(ok: false, error: L10n.text(.ctlAppNotReady))
         }
         server.start()
         ctlServer = server
@@ -200,18 +269,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func handleCtlRequest(_ request: DialCtlProtocol.Request) -> DialCtlProtocol.Response {
         guard let renderer = ledRenderer else {
-            return .init(ok: false, error: "灯效渲染器未就绪")
+            return .init(ok: false, error: L10n.text(.ctlRendererNotReady))
         }
         switch request.command {
         case "led":
             guard let raw = request.state, let state = DialAgentState(rawValue: raw) else {
-                return .init(ok: false, error: "未知状态 \(request.state ?? "nil")")
+                return .init(ok: false, error: L10n.text(.ctlUnknownState) + (request.state ?? "nil"))
             }
             renderer.request(state)
             return .init(ok: true, state: state.rawValue)
         case "hook":
             guard let event = request.event else {
-                return .init(ok: false, error: "缺少 event")
+                return .init(ok: false, error: L10n.text(.ctlMissingEvent))
             }
             let dialect = request.dialect ?? "claude"
             guard let state = DialAgentEventMapper.state(
@@ -221,17 +290,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             let session = request.session ?? "default"
             let resolved = ledSessionAggregator.record(
-                session: session, state: state, now: Date().timeIntervalSince1970
+                session: session, state: state, now: Date().timeIntervalSince1970,
+                agent: request.agent
             )
             renderer.request(resolved)
+            refreshUI()
             return .init(ok: true, state: resolved.rawValue)
         case "restore":
             renderer.shutdown()
             return .init(ok: true, state: "off")
         case "status":
-            return .init(ok: true, state: renderer.state.rawValue)
+            let details = ledSessionAggregator
+                .activeSessions(now: Date().timeIntervalSince1970)
+                .map { info in
+                    DialCtlProtocol.Response.SessionDetail(
+                        id: info.id, agent: info.agent, state: info.state.rawValue,
+                        ageSeconds: Int(info.ageSeconds), winning: info.isWinning
+                    )
+                }
+            return .init(ok: true, state: renderer.state.rawValue, sessions: details)
         default:
-            return .init(ok: false, error: "未知命令 \(request.command)")
+            return .init(ok: false, error: L10n.text(.ctlUnknownCommand) + request.command)
         }
     }
 
@@ -242,8 +321,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             configuration = try store.loadOrCreate()
             let migratedKnob = configuration.restoreLegacyReservedKnobMappings()
             let needsInitialNativeBackup = configuration.offlineProfile == nil
-            if migratedKnob || needsInitialNativeBackup {
-                configuration.needsHardwareSync = true
+            // One-time normalization: old configs may still carry the removed
+            // "switchProfile" action on disk. It decodes as .none in memory;
+            // rewrite the file once so the stale string does not linger.
+            let rawContainsRemovedAction = (try? Data(contentsOf: url))
+                .flatMap { String(data: $0, encoding: .utf8) }?
+                .contains("switchProfile") ?? false
+            if migratedKnob || needsInitialNativeBackup || rawContainsRemovedAction {
+                if migratedKnob || needsInitialNativeBackup {
+                    configuration.needsHardwareSync = true
+                }
                 try store.save(configuration)
             }
             needsHardwareSync = configuration.needsHardwareSync
@@ -251,35 +338,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             configurationReady = true
         } catch {
             configurationReady = false
-            notice = "配置文件读取失败：\(error.localizedDescription)"
+            notice = L10n.text(.noticeConfigReadFailed) + error.localizedDescription
         }
     }
 
-    private func configureStatusItemAndPopover() {
+    private func configureStatusItemAndPanel() {
         let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         statusItem.button?.target = self
-        statusItem.button?.action = #selector(togglePopover(_:))
+        statusItem.button?.action = #selector(togglePanel(_:))
         self.statusItem = statusItem
 
         let settings = SettingsViewController(configuration: configuration)
-        settings.onProfileSelected = { [weak self] profile in
-            guard let self else { return }
-            guard !self.hardwareSyncInProgress else {
-                self.refreshUI()
-                return
-            }
-            guard profile != self.configuration.activeProfile else { return }
-            let previousConfiguration = self.configuration
-            self.cancelPendingInput()
-            self.configuration.activeProfile = profile
-            guard self.persistConfiguration() else {
-                self.configuration = previousConfiguration
-                self.refreshUI()
-                return
-            }
-            self.notice = "已切换到「\(profile.displayName)」；设备离线组未改动。"
-            self.refreshUI()
-        }
         settings.onMappingChanged = { [weak self] profile, control, binding in
             guard let self else { return }
             guard !self.hardwareSyncInProgress else {
@@ -296,25 +365,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 return
             }
             if case .preset(let action) = binding, action.isAppOnly {
-                self.notice = "App 专属键已保存；只在 App 开启时执行，离线六键会为它写入空槽。"
+                self.notice = L10n.text(.noticeAppOnlySaved)
             } else {
-                self.notice = control.isNativeHardwareControl
-                    ? "设置已保存；按「写入设备」才会写入 AU05。"
-                    : "双按设置已保存。"
+                self.notice = L10n.text(.noticeMappingSavedAuto)
             }
             self.refreshUI()
-        }
-        settings.onRestartApplication = { [weak self] in
-            self?.restartApplication()
-        }
-        settings.onSyncHardware = { [weak self] in
-            self?.syncHardwareFromUI()
-        }
-        settings.onToggleEnhancedMode = { [weak self] in
-            self?.toggleEnhancedMode()
-        }
-        settings.onToggleLaunchAtLogin = { [weak self] in
-            self?.toggleLaunchAtLogin()
+            // The device backup follows the edit automatically (debounced
+            // so rapid successive changes coalesce into one write).
+            if control.isNativeHardwareControl {
+                self.configuration.needsHardwareSync = true
+                self.needsHardwareSync = true
+                self.scheduleAutoSync(delay: 1.5)
+            }
         }
         settings.onQuit = {
             NSApplication.shared.terminate(nil)
@@ -325,21 +387,50 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         settings.onPreviewLedState = { [weak self] state in
             self?.previewLedState(state)
         }
+        settings.onLightModeChanged = { [weak self] mode in
+            self?.changeLightMode(mode)
+        }
+        settings.onGrantAccessibility = {
+            PermissionGuide.requestAccessibility()
+        }
+        settings.onGrantInputMonitoring = {
+            PermissionGuide.requestInputMonitoring()
+        }
+        settings.onShowGuide = { [weak self] in
+            self?.showGuideWindow()
+        }
         settingsViewController = settings
 
-        let popover = NSPopover()
-        popover.behavior = .transient
-        popover.animates = true
-        popover.contentSize = NSSize(width: 400, height: 560)
-        popover.contentViewController = settings
-        self.popover = popover
+        let panel = DialPanelController(
+            content: settings,
+            statusButton: { [weak self] in self?.statusItem?.button }
+        )
+        panel.onShow = { [weak self] in
+            self?.hardwareListener?.powerPollEveryNHeartbeats = 3
+            self?.hardwareListener?.refreshPowerStatus()
+        }
+        panel.onClose = { [weak self] in
+            self?.hardwareListener?.powerPollEveryNHeartbeats = 30
+        }
+        panelController = panel
     }
+
+    // MARK: - Live power polling
+
+    /// The AU05 does not push charge-state changes; the host must GET them.
+    /// Originally the only GET triggers were connect/resume and opening the
+    /// panel — so plugging in the charger showed nothing until the next
+    /// click. Now: while the panel is open, a battery query rides every 3rd
+    /// heartbeat (~2.4 s, feels live); while closed, every 30th (~24 s) so
+    /// the menu-bar badge stays honest without meaningful extra traffic
+    /// (the heartbeat itself already runs every 0.8 s). The cadence flip
+    /// lives in the panel's onShow/onClose hooks.
 
     /// Panel LED preview: hold a state on the device, or return to live.
     /// Preview bypasses the session aggregator on purpose — it is a manual
-    /// demonstration, not an agent event.
+    /// demonstration, not an agent event. Only meaningful in smart mode.
     private func previewLedState(_ state: DialAgentState?) {
-        guard let renderer = ledRenderer else { return }
+        guard let renderer = ledRenderer, configuration.lightMode == .smart else { return }
         if let state {
             renderer.request(state)
         } else {
@@ -347,6 +438,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             renderer.request(resolved)
         }
         settingsViewController?.currentLedState = renderer.state
+    }
+
+    /// Applies a light mode: static modes write their table once and suppress
+    /// agent rendering; smart re-enables the engine and replays live state.
+    private func applyLightMode(_ mode: DialLightMode) {
+        guard let renderer = ledRenderer else { return }
+        if let table = mode.staticTable {
+            renderer.staticMode = true
+            renderer.applyStatic(table)
+        } else {
+            renderer.staticMode = false
+            let resolved = ledSessionAggregator.resolvedState(now: Date().timeIntervalSince1970)
+            renderer.request(resolved)
+        }
+    }
+
+    private func changeLightMode(_ mode: DialLightMode) {
+        guard mode != configuration.lightMode else { return }
+        let previous = configuration
+        configuration.lightMode = mode
+        guard persistConfiguration() else {
+            configuration = previous
+            refreshUI()
+            return
+        }
+        applyLightMode(mode)
+        refreshUI()
     }
 
     private func configureHardwareListener() {
@@ -357,6 +475,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             powerResponseHandler: { [weak self] response in
                 guard let self else { return }
                 self.devicePowerStatus.apply(response)
+                if case .battery = response {
+                    // Battery moved: flip the menu-bar badge (low ↔ charging
+                    // ↔ normal) and, if the panel is open, its ring gauge —
+                    // the user is watching it while plugging in the charger.
+                    self.refreshStatusItem()
+                    if self.panelController?.isVisible == true {
+                        self.refreshUI()
+                    }
+                }
                 if case let .standbyTime(seconds) = response {
                     self.applyPowerHandoffDecisions(
                         self.powerHandoffStateMachine.updateIdleInterval(
@@ -387,6 +514,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 guard let self else { return }
                 self.deviceConnected = connected
                 if !connected {
+                    self.deviceResponsive = true
                     self.devicePowerStatus = DialPowerSnapshot()
                     self.powerSaving = false
                     self.cancelPowerHandoff(
@@ -401,12 +529,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                             at: HIDMonotonicClock.now
                         )
                     )
+                    // Device just appeared: finish any pending backup write.
+                    if self.needsHardwareSync {
+                        self.scheduleAutoSync(delay: 0.5)
+                    }
                 }
                 if connected,
-                   self.notice?.hasPrefix("AU05 已移除") == true
-                    || self.notice?.hasPrefix("AU05 重新启动") == true
-                    || self.notice?.hasPrefix("等待 AU05") == true {
+                   self.notice == L10n.text(.noticeDeviceRemoved)
+                    || self.notice == L10n.text(.noticeDeviceRestarting)
+                    || self.notice == L10n.text(.noticeWaitingDeviceReturn) {
                     self.notice = nil
+                }
+                self.refreshUI()
+            },
+            responsivenessHandler: { [weak self] responsive in
+                guard let self else { return }
+                self.deviceResponsive = responsive
+                if !responsive {
+                    // The last battery reading is a memory, not a measurement.
+                    self.devicePowerStatus = DialPowerSnapshot()
+                    self.cancelPowerHandoff(reason: .onlinePrerequisiteLost)
                 }
                 self.refreshUI()
             },
@@ -436,7 +578,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             queue: .main
         ) { [weak self] _ in
             self?.stopEnhancedMode(
-                notice: "Mac 即将睡眠；AU05 已退回设备原生按键。"
+                notice: L10n.text(.noticeMacSleeping)
             )
         })
 
@@ -446,7 +588,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             queue: .main
         ) { [weak self] _ in
             self?.stopEnhancedMode(
-                notice: "Mac 即将关机；AU05 已退回设备原生按键。"
+                notice: L10n.text(.noticeMacShuttingDown)
             )
         })
 
@@ -469,7 +611,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             self?.ledRenderer?.suspendForVendor()
             self?.stopEnhancedMode(
-                notice: "Ulanzi Studio 已开启；AU05 已退回设备原生按键。"
+                notice: L10n.text(.noticeStudioOpened)
             )
         })
 
@@ -481,17 +623,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard Self.isVendorApplication(notification) else { return }
             self?.resumeEnhancedModeIfSafe()
             self?.ledRenderer?.resume()
-        })
-
-        // M1: auto-switch profile by frontmost app (config appProfileMapping).
-        workspaceObservers.append(center.addObserver(
-            forName: NSWorkspace.didActivateApplicationNotification,
-            object: nil,
-            queue: .main
-        ) { [weak self] notification in
-            guard let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey]
-                as? NSRunningApplication else { return }
-            self?.scheduleAppProfileSwitch(bundleID: app.bundleIdentifier)
         })
     }
 
@@ -524,33 +655,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         listenerActive = false
         deviceConnected = false
+        deviceResponsive = true
         devicePowerStatus = DialPowerSnapshot()
         powerSaving = false
         return offlineError
     }
 
-    private func toggleEnhancedMode() {
-        if listenerActive {
-            enhancedModeRequested = false
-            stopEnhancedMode(
-                notice: "已切回 AU05 原生六键。",
-                reason: .manualNative
-            )
-            return
-        }
-
-        enhancedModeRequested = true
-        if needsHardwareSync {
-            notice = "请先按「写入设备」确认完整六键；不会自动改写 AU05。"
-            refreshUI()
-        } else {
-            startHardwareListener(promptForPermission: true)
-        }
-    }
-
     private func resumeEnhancedModeIfSafe() {
         guard !listenerActive,
-              enhancedModeRequested,
               !hardwareSyncInProgress,
               !needsHardwareSync else { return }
         startHardwareListener(promptForPermission: false)
@@ -602,7 +714,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     notice = (stopError ?? error).localizedDescription
                 } else {
                     powerSaving = true
-                    notice = "闲置省电中；控制器醒来后会自动恢复三种手势。"
+                    notice = L10n.text(.noticePowerSaving)
                 }
                 refreshUI()
 
@@ -618,12 +730,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                             "Stale connection cleanup reported: \(stopError.localizedDescription, privacy: .public)"
                         )
                     }
-                    notice = "AU05 重新启动；正在自动重建连接。"
+                    notice = L10n.text(.noticeDeviceRestarting)
                     scheduleConnectionRecovery()
                 } else {
                     powerSaving = false
                     devicePowerStatus.isStandby = false
-                    if notice?.hasPrefix("闲置省电中") == true {
+                    if notice == L10n.text(.noticePowerSaving) {
                         notice = nil
                     }
                     applyPowerHandoffDecisions(
@@ -643,51 +755,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         _ = powerHandoffStateMachine.suspendAutomaticResume(reason: reason)
     }
 
-    private func restartApplication() {
-        guard !hardwareSyncInProgress else {
-            notice = "AU05 写入中；完成后再重启 App。"
-            refreshUI()
-            return
-        }
-
-        if let error = suspendEnhancedMode() {
-            notice = "尚未重启：\(error.localizedDescription)"
-            refreshUI()
-            return
-        }
-        guard !offlineStateUnconfirmed else {
-            notice = "尚未确认 AU05 已回原生模式；请先完成一次「写入设备」，再重启。"
-            refreshUI()
-            return
-        }
-
-        let configuration = NSWorkspace.OpenConfiguration()
-        configuration.createsNewApplicationInstance = true
-        NSWorkspace.shared.openApplication(
-            at: Bundle.main.bundleURL,
-            configuration: configuration
-        ) { [weak self] _, error in
-            DispatchQueue.main.async {
-                if let error {
-                    self?.notice = "重新启动失败：\(error.localizedDescription)"
-                    self?.resumeEnhancedModeIfSafe()
-                    self?.refreshUI()
-                    return
-                }
-                NSApplication.shared.terminate(nil)
-            }
-        }
-    }
-
     private func startHardwareListener(promptForPermission: Bool) {
         cancelPendingInput()
 
-        guard enhancedModeRequested else { return }
 
         guard configurationReady else {
             listenerActive = false
             deviceConnected = false
-            notice = "配置文件无法使用；AU05 保持设备原生模式。"
+            notice = L10n.text(.noticeConfigUnusable)
             refreshUI()
             return
         }
@@ -699,7 +774,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard accessibilityGranted else {
             listenerActive = false
             deviceConnected = false
-            notice = "原生六键仍可用；允许「辅助使用」后，双按与长按才会启用。"
+            notice = L10n.text(.noticeNeedAccessibility)
             refreshUI()
             return
         }
@@ -707,7 +782,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard vendorApplicationIsNotRunning else {
             listenerActive = false
             deviceConnected = false
-            notice = "Ulanzi Studio 正在运行，按键由它接管。点「写入设备」会自动退出它并写入。"
+            notice = L10n.text(.noticeStudioRunning)
             refreshUI()
             return
         }
@@ -717,7 +792,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         } catch {
             listenerActive = false
             deviceConnected = false
-            notice = "原生六键仍可用；进階手势设置无效：\(error.localizedDescription)"
+            notice = L10n.text(.noticeGestureInvalid) + error.localizedDescription
             refreshUI()
             return
         }
@@ -726,13 +801,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             try hardwareListener?.start(promptForPermission: promptForPermission)
             listenerActive = true
             DebugLog.log("startHardwareListener: listener started OK")
-            if notice?.contains("权限") == true || notice?.hasPrefix("监听失败") == true {
+            if notice == L10n.text(.noticeNeedAccessibility)
+                || notice?.hasPrefix(L10n.text(.noticeListenFailed)) == true {
                 notice = nil
             }
         } catch {
             listenerActive = false
             deviceConnected = false
-            notice = "监听失败：\(error.localizedDescription)"
+            notice = L10n.text(.noticeListenFailed) + error.localizedDescription
         logger.error(
             "Listener startup failed: \(error.localizedDescription, privacy: .public)"
         )
@@ -744,7 +820,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func scheduleConnectionRecovery() {
         guard !deviceConnected,
-              enhancedModeRequested,
               !needsHardwareSync else { return }
         connectionRecoveryAttemptsRemaining = 3
         scheduleNextConnectionRecovery()
@@ -759,7 +834,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard let self else { return }
             self.connectionRecoveryTimer = nil
             guard !self.deviceConnected,
-                  self.enhancedModeRequested,
                   !self.needsHardwareSync else { return }
 
             self.connectionRecoveryAttemptsRemaining -= 1
@@ -779,7 +853,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if self.connectionRecoveryAttemptsRemaining > 0 {
                 self.scheduleNextConnectionRecovery()
             } else {
-                self.notice = "等待 AU05 重新开机；侦测到后会自动接回。"
+                self.notice = L10n.text(.noticeWaitingDeviceReturn)
                 self.refreshUI()
             }
         }
@@ -788,8 +862,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func resetKnobPressState() {
-        knobLongPressTimer?.invalidate()
-        knobLongPressTimer = nil
         knobSinglePressTimer?.invalidate()
         knobSinglePressTimer = nil
         knobPressStateMachine.reset()
@@ -807,7 +879,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         deviceConnected = false
         devicePowerStatus = DialPowerSnapshot()
         powerSaving = false
-        notice = "AU05 已移除；未完成的旋钮按压已取消。"
+        notice = L10n.text(.noticeDeviceRemoved)
         refreshUI()
     }
 
@@ -840,8 +912,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 // AU05 controls are macro triggers. Send one complete tap on
                 // down so a crash can never leave a synthetic modifier held.
                 try actionPerformer.tap(binding, for: control)
+                recordUsage(control)
             } catch {
-                notice = "按键执行失败：\(error.localizedDescription)"
+                notice = L10n.text(.noticeActionFailed) + error.localizedDescription
                 refreshUI()
             }
             return
@@ -851,13 +924,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if phase == .down {
                 DebugLog.log("voice: press (FN down)")
                 try actionPerformer.press(binding, for: control)
+                recordUsage(control)
             } else {
                 DebugLog.log("voice: release (FN up)")
                 actionPerformer.release(for: control)
             }
         } catch {
             DebugLog.log("voice FAILED: \(error.localizedDescription)")
-            notice = "按键执行失败：\(error.localizedDescription)"
+            notice = L10n.text(.noticeActionFailed) + error.localizedDescription
             refreshUI()
         }
     }
@@ -867,8 +941,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .down:
             applyKnobPressDecisions(knobPressStateMachine.pressDown(at: timestamp))
         case .up:
-            knobLongPressTimer?.invalidate()
-            knobLongPressTimer = nil
             applyKnobPressDecisions(knobPressStateMachine.pressUp(at: timestamp))
         }
     }
@@ -882,17 +954,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func applyKnobPressDecision(_ decision: KnobPressDecision) {
         logger.notice("Knob decision: \(String(describing: decision), privacy: .public)")
         switch decision {
-        case let .scheduleLongPress(delay):
-            knobLongPressTimer?.invalidate()
-            let timer = Timer(timeInterval: delay, repeats: false) { [weak self] _ in
-                guard let self else { return }
-                self.knobLongPressTimer = nil
-                self.applyKnobPressDecisions(
-                    self.knobPressStateMachine.longPressTimerFired()
-                )
-            }
-            knobLongPressTimer = timer
-            RunLoop.main.add(timer, forMode: .common)
         case let .scheduleSinglePress(delay):
             knobSinglePressTimer?.invalidate()
             let timer = Timer(timeInterval: delay, repeats: false) { [weak self] _ in
@@ -911,99 +972,43 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             performGestureBinding(for: .knobPress)
         case .performDoublePress:
             performGestureBinding(for: .knobDoublePress)
-        case .longPressRecognized:
-            notice = "已辨识长按；放开旋钮后切换设置组。"
-            refreshUI()
-        case .switchProfile:
-            switchProfile()
         }
     }
 
     private func performGestureBinding(for control: InputControl) {
         let binding = configuration[configuration.activeProfile][control]
-        if binding == .preset(.switchProfile) {
-            switchProfile()
-            return
-        }
-
         do {
             try actionPerformer.tap(binding, for: control)
+            recordUsage(control)
         } catch {
-            notice = "按键执行失败：\(error.localizedDescription)"
+            notice = L10n.text(.noticeActionFailed) + error.localizedDescription
             refreshUI()
         }
     }
 
-    private func switchProfile() {
-        let previousConfiguration = configuration
-        actionPerformer.releaseAll()
-        configuration.activeProfile = configuration.activeProfile.toggled
-        guard persistConfiguration() else {
-            configuration = previousConfiguration
-            refreshUI()
-            return
-        }
-        logger.notice(
-            "Profile switched to \(self.configuration.activeProfile.rawValue, privacy: .public)"
-        )
-        notice = "已切换到「\(configuration.activeProfile.displayName)」；设备离线组未改动。"
-        refreshUI()
-    }
+    // MARK: - Automatic device backup (no manual write button)
 
-    // MARK: - M1 frontmost-app profile switching
-
-    /// 200 ms debounce absorbs ⌘Tab / Mission Control activation storms.
-    /// The Core debouncer guarantees only the latest activation survives.
-    private func scheduleAppProfileSwitch(bundleID: String?) {
-        appProfileDebounceWorkItem?.cancel()
-        let token = appActivationDebouncer.activate(bundleID)
+    /// Debounced auto-sync. Coalesces rapid mapping edits into one write;
+    /// skips while a write is in flight or the device is absent (the
+    /// connect handler re-triggers when it appears).
+    private func scheduleAutoSync(delay: TimeInterval) {
+        autoSyncWorkItem?.cancel()
         let workItem = DispatchWorkItem { [weak self] in
-            guard let self,
-                  let settled = self.appActivationDebouncer.fire(generation: token)
-            else { return }
-            self.applyAppProfileSwitch(bundleID: settled)
+            guard let self else { return }
+            self.autoSyncWorkItem = nil
+            guard self.configurationReady,
+                  self.needsHardwareSync,
+                  !self.hardwareSyncInProgress,
+                  self.deviceConnected else { return }
+            self.syncHardware(profileID: self.configuration.activeProfile)
         }
-        appProfileDebounceWorkItem = workItem
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2, execute: workItem)
-    }
-
-    private func applyAppProfileSwitch(bundleID: String?) {
-        guard configurationReady, !hardwareSyncInProgress else { return }
-        guard let target = DialAppProfileSwitcher.targetProfile(
-            frontmostBundleID: bundleID,
-            mapping: configuration.appProfileMapping,
-            currentProfile: configuration.activeProfile
-        ) else { return }
-        let previousConfiguration = configuration
-        actionPerformer.releaseAll()
-        let settled = DialAppProfileSwitcher.applySwitch(
-            target: target,
-            currentProfile: configuration.activeProfile
-        ) { [weak self] candidate in
-            guard let self else { return false }
-            self.configuration.activeProfile = candidate
-            return self.persistConfiguration()
-        }
-        guard settled == target else {
-            configuration = previousConfiguration
-            refreshUI()
-            return
-        }
-        logger.notice(
-            "Profile auto-switched to \(target.rawValue, privacy: .public) for \(bundleID ?? "?", privacy: .public)"
-        )
-        notice = "已按前台 App 切换到「\(target.displayName)」；设备离线组未改动。"
-        refreshUI()
-    }
-
-    private func syncHardwareFromUI() {
-        guard !hardwareSyncInProgress else { return }
-        syncHardware(profileID: configuration.activeProfile)
+        autoSyncWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: workItem)
     }
 
     private func syncHardware(profileID: ProfileID) {
         guard configurationReady else {
-            notice = "配置文件无法使用；未写入 AU05。"
+            notice = L10n.text(.noticeConfigUnusableNoWrite)
             refreshUI()
             return
         }
@@ -1026,7 +1031,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func exitVendorThenSync(vendor: NSRunningApplication, profileID: ProfileID) {
         hardwareSyncInProgress = true
         vendorInterferedDuringHardwareSync = false
-        notice = "Ulanzi Studio 正在运行；正在自动退出它…"
+        notice = L10n.text(.noticeStudioQuitting)
         refreshUI()
         vendor.terminate()
 
@@ -1048,12 +1053,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 guard let self else { return }
                 self.hardwareSyncInProgress = false
                 guard vendorExited else {
-                    self.notice = "Ulanzi Studio 未退出；未写入 AU05。"
+                    self.notice = L10n.text(.noticeStudioNotQuit)
                     let alert = NSAlert()
                     alert.alertStyle = .warning
-                    alert.messageText = "Ulanzi Studio 没有退出，无法写入 AU05"
-                    alert.informativeText = "Ulanzi Studio 正在接管 AU05，且未能自动退出。请手动完全退出它（程序坞右键图标选「退出」，或 ⌘Q），然后再点一次「写入设备」。"
-                    alert.addButton(withTitle: "知道了")
+                    alert.messageText = L10n.text(.alertStudioNotQuitTitle)
+                    alert.informativeText = L10n.text(.alertStudioNotQuitBody)
+                    alert.addButton(withTitle: L10n.text(.alertOK))
                     alert.runModal()
                     self.refreshUI()
                     return
@@ -1086,11 +1091,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         vendorInterferedDuringHardwareSync = false
         if let error = suspendEnhancedMode() {
             hardwareSyncInProgress = false
-            notice = "未写入 AU05：\(error.localizedDescription)"
+            notice = L10n.text(.noticeWriteFailed) + error.localizedDescription
             refreshUI()
             return
         }
-        notice = "正在写入「\(profileID.displayName)」原生按键…"
+        notice = L10n.text(.noticeWritingDevice)
         refreshUI()
 
         let configurator = hardwareConfigurator
@@ -1110,23 +1115,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         || !self.vendorApplicationIsNotRunning {
                         self.configuration.needsHardwareSync = true
                         self.needsHardwareSync = true
-                        self.notice = "Ulanzi Studio 在写入时开启；设备内容不确定。请关闭它，再按「写入设备」。"
+                        self.notice = L10n.text(.noticeStudioDuringWrite)
                         self.presentSyncFailureAlert(
-                            "写入过程中 Ulanzi Studio 开启了，设备内容不确定。请完全退出 Ulanzi Studio，再点一次「写入设备」。"
+                            L10n.text(.noticeStudioDuringWrite)
                         )
                     } else if let markerSaveError = self.completeHardwareSync(profileID: profileID) {
-                        self.notice = "已写入「\(profileID.displayName)」，但同步状态保存失败：\(markerSaveError) 下次启动会再写一次。"
+                        self.notice = L10n.text(.noticeWroteMarkerSaveFailed) + markerSaveError
                     } else if hasAppOnlyBindings {
-                        self.notice = "已写入「\(profileID.displayName)」：关掉 App 仍可使用。App 专属键（语音／Fn 双擊）离线为空，该键需 App 执行。"
+                        self.notice = L10n.text(.noticeWroteAppOnly)
                     } else {
-                        self.notice = "已写入「\(profileID.displayName)」：关掉 App 仍可使用。"
+                        self.notice = L10n.text(.noticeWrote)
                     }
                     self.logger.notice(
                         "Hardware profile \(profileID.rawValue, privacy: .public) written successfully"
                     )
                     if !self.needsHardwareSync,
                        !self.listenerActive,
-                       self.enhancedModeRequested {
+                       true {
                         self.startHardwareListener(promptForPermission: true)
                     }
                 case let .failure(error):
@@ -1134,17 +1139,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         switch configurationError {
                         case .offlineWriteFailed:
                             self.offlineStateUnconfirmed = true
-                            self.notice = "同步中止：\(error.localizedDescription) 六键尚未开始写入；请保持连接再试。"
+                            self.notice = L10n.text(.noticeSyncAborted) + error.localizedDescription + L10n.text(.noticeSyncAbortedShort)
                         case .reportWriteFailed:
                             self.offlineStateUnconfirmed = false
-                            self.notice = "同步失败：\(error.localizedDescription) 设备可能只写入部分；请保持连接，再按「写入设备」。"
+                            self.notice = L10n.text(.noticeSyncFailedPartial) + error.localizedDescription + L10n.text(.noticeSyncFailed)
                         default:
-                            self.notice = "同步中止：\(error.localizedDescription) 六键尚未开始写入。"
+                            self.notice = L10n.text(.noticeSyncAborted) + error.localizedDescription
                         }
                     } else {
-                        self.notice = "同步失败：\(error.localizedDescription)"
+                        self.notice = L10n.text(.noticeSyncFailedPartial) + error.localizedDescription
                     }
-                    self.presentSyncFailureAlert(self.notice ?? "同步失败。")
+                    self.presentSyncFailureAlert(self.notice ?? L10n.text(.alertSyncFailedFallback))
                     self.logger.error(
                         "Hardware profile write failed: \(error.localizedDescription, privacy: .public)"
                     )
@@ -1163,34 +1168,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func presentSyncFailureAlert(_ guidance: String) {
         let alert = NSAlert()
         alert.alertStyle = .warning
-        alert.messageText = "「写入设备」没有完成"
+        alert.messageText = L10n.text(.alertSyncIncompleteTitle)
         alert.informativeText = guidance
-        alert.addButton(withTitle: "知道了")
+        alert.addButton(withTitle: L10n.text(.alertOK))
         alert.runModal()
-    }
-
-    private var launchAtLoginStatusEnabled: Bool {
-        SMAppService.mainApp.status == .enabled
-    }
-
-    private func toggleLaunchAtLogin() {
-        let service = SMAppService.mainApp
-        switch service.status {
-        case .enabled:
-            do {
-                try service.unregister()
-            } catch {
-                notice = "关闭开机自启失败：\(error.localizedDescription)"
-            }
-        default:
-            do {
-                try service.register()
-                notice = "已开启开机自启；下次重启后 DialPilot 会自动运行。"
-            } catch {
-                notice = "开启开机自启失败：\(error.localizedDescription)"
-            }
-        }
-        refreshUI()
     }
 
     private var vendorApplicationIsNotRunning: Bool {
@@ -1201,7 +1182,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private var onlinePreflightIsValid: Bool {
         guard configurationReady,
-              enhancedModeRequested,
               configuration.offlineProfile != nil,
               !needsHardwareSync,
               vendorApplicationIsNotRunning,
@@ -1219,7 +1199,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func completeHardwareSync(profileID: ProfileID) -> String? {
         guard let configStore else {
-            return "配置文件位置不可用。"
+            return L10n.text(.syncConfigLocationUnavailable)
         }
 
         let previousOfflineProfile = configuration.offlineProfile
@@ -1240,18 +1220,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @discardableResult
     private func persistConfiguration() -> Bool {
         guard let configStore else {
-            notice = "配置文件位置不可用，这次变更尚未保存。"
+            notice = L10n.text(.noticeConfigLocationUnavailable)
             return false
         }
 
         do {
             try configStore.save(configuration)
-            if notice?.contains("尚未保存") == true || notice?.hasPrefix("配置文件") == true {
+            if notice == L10n.text(.noticeConfigLocationUnavailable)
+                || notice?.hasPrefix(L10n.text(.noticeConfigSaveFailed)) == true
+                || notice?.hasPrefix(L10n.text(.noticeConfigReadFailed)) == true {
                 notice = nil
             }
             return true
         } catch {
-            notice = "配置文件保存失败：\(error.localizedDescription)"
+            notice = L10n.text(.noticeConfigSaveFailed) + error.localizedDescription
             return false
         }
     }
@@ -1262,33 +1244,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             configuration: configuration,
             listenerActive: listenerActive,
             accessibilityGranted: accessibilityGranted,
+            inputMonitoringGranted: IOHIDListenAccess.isGranted,
             deviceConnected: deviceConnected,
+            deviceResponsive: deviceResponsive,
             powerStatus: devicePowerStatus,
             powerSaving: powerSaving,
             hardwareSyncInProgress: hardwareSyncInProgress,
-            launchAtLoginEnabled: launchAtLoginStatusEnabled,
-            notice: notice
+            notice: notice,
+            usageStats: usageStats,
+            activeSessions: ledSessionAggregator.activeSessions(now: Date().timeIntervalSince1970)
         )
         if let renderer = ledRenderer {
             settingsViewController?.currentLedState = renderer.state
         }
+        // The heartbeat calls refreshUI continuously, which gives the panel
+        // a free anchor check: if a menu-bar manager moved the status item
+        // (or the icon was hidden entirely), the panel follows or closes
+        // instead of hovering in the wrong place.
+        panelController?.repositionIfNeeded()
     }
 
     private func refreshStatusItem() {
         guard let button = statusItem?.button else { return }
 
-        let profileName = configuration.activeProfile.displayName
+        let state = DialStatusBar.resolve(
+            deviceConnected: deviceConnected,
+            deviceResponsive: deviceResponsive,
+            accessibilityGranted: accessibilityGranted,
+            inputMonitoringGranted: IOHIDListenAccess.isGranted,
+            battery: devicePowerStatus.battery
+        )
         let batteryDescription = devicePowerStatus.battery.map {
-            "，电量 \($0.percent)%"
+            L10n.text(.batterySuffix) + "\($0.percent)%"
         } ?? ""
-        let accessibleName = "DialPilot：\(profileName)\(batteryDescription)"
-        let preferredSymbol = configuration.activeProfile == .a
-            ? "sparkles"
-            : "slider.horizontal.3"
-        let image = DialStatusIcon.image(for: configuration.activeProfile) ?? NSImage(
-            systemSymbolName: preferredSymbol,
-            accessibilityDescription: nil
-        ) ?? NSImage(
+        let accessibleName = "DialPilot · " + Self.statusBarDescription(state) + batteryDescription
+        let darkMenuBar = Self.menuBarIsDark()
+        let image = DialStatusIcon.image(for: state, darkMenuBar: darkMenuBar) ?? NSImage(
             systemSymbolName: "dial.medium",
             accessibilityDescription: nil
         )
@@ -1297,7 +1288,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         button.setAccessibilityLabel(accessibleName)
 
         if let image {
-            image.isTemplate = true
             button.image = image
             button.imagePosition = .imageOnly
             button.title = ""
@@ -1308,23 +1298,94 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    @objc private func togglePopover(_ sender: Any?) {
-        guard statusItem?.button != nil, let popover else { return }
-
-        if popover.isShown {
-            popover.performClose(sender)
-        } else {
-            showPopover()
+    private static func statusBarDescription(_ state: DialStatusBarState) -> String {
+        switch state {
+        case .disconnected: return L10n.text(.statusDisconnected)
+        case .needsPermission: return L10n.text(.statusNeedsPermission)
+        case .lowBattery: return L10n.text(.statusLowBattery)
+        case .charging: return L10n.text(.statusCharging)
+        case .normal: return L10n.text(.statusNormal)
         }
     }
 
-    private func showPopover() {
-        guard let button = statusItem?.button,
-              let popover,
-              !popover.isShown else { return }
+    /// The menu bar follows the system appearance (it can stay dark even
+    /// in light mode with "dark menu bar" wallpapers). Badge variants are
+    /// non-template, so we must pick the body color ourselves.
+    private static func menuBarIsDark() -> Bool {
+        let match = NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua])
+        return match == .darkAqua
+    }
+
+    private func observeMenuBarAppearance() {
+        appearanceObserver = DistributedNotificationCenter.default().addObserver(
+            forName: NSNotification.Name("AppleInterfaceThemeChangedNotification"),
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.refreshStatusItem()
+        }
+    }
+
+    // MARK: - Usage statistics
+
+    private func loadUsageStats() {
+        do {
+            let url = try DialUsageStats.defaultURL()
+            usageStatsURL = url
+            usageStats = DialUsageStats.load(from: url)
+        } catch {
+            logger.error("Usage stats location unavailable: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    /// Records one performed control event. Called from the input paths
+    /// only — never from preview/ctl. Persistence is debounced 2 s so a
+    /// knob spin (dozens of detents) writes once, not dozens of times.
+    private func recordUsage(_ control: InputControl) {
+        usageStats.record(
+            control: control,
+            on: DialUsageStats.dayKey(for: Date())
+        )
+        scheduleUsageSave()
+    }
+
+    private func scheduleUsageSave() {
+        usageSaveWorkItem?.cancel()
+        let workItem = DispatchWorkItem { [weak self] in
+            self?.flushUsageStats()
+        }
+        usageSaveWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0, execute: workItem)
+    }
+
+    private func flushUsageStats() {
+        usageSaveWorkItem?.cancel()
+        usageSaveWorkItem = nil
+        guard let url = usageStatsURL else { return }
+        do {
+            try usageStats.save(to: url)
+        } catch {
+            logger.error("Usage stats save failed: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    @objc private func togglePanel(_ sender: Any?) {
+        guard statusItem?.button != nil, let panelController else { return }
+        if panelController.isVisible {
+            panelController.dismiss()
+        } else {
+            showPanel()
+        }
+    }
+
+    private func showPanel() {
+        guard let panelController, !panelController.isVisible else { return }
         resumeAfterUserActivityIfNeeded()
-        popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+        // Re-check permissions every time the panel opens: the user may have
+        // just granted them in System Settings and come back.
+        accessibilityGranted = AccessibilityAccess.isTrusted(promptForPermission: false)
+        refreshUI()
+        panelController.present()
         hardwareListener?.refreshPowerStatus()
-        NSApplication.shared.activate(ignoringOtherApps: true)
     }
 }

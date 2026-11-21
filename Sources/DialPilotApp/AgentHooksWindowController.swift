@@ -25,7 +25,7 @@ final class AgentHooksWindowController: NSWindowController {
             backing: .buffered,
             defer: false
         )
-        window.title = "Agent 灯效接入"
+        window.title = L10n.text(.hooksWindowTitle)
         self.init(window: window)
         buildUI()
         refresh()
@@ -34,25 +34,32 @@ final class AgentHooksWindowController: NSWindowController {
     private func buildUI() {
         guard let contentView = window?.contentView else { return }
 
-        let intro = NSTextField(wrappingLabelWithString:
-            "选择要接入灯效的 Agent。安装前会检测软件是否已安装；安装只新增带 dialpilot 标记的 hooks，卸载只移除这些条目，你已有的配置原样保留。")
+        let intro = NSTextField(wrappingLabelWithString: L10n.text(.hooksIntro))
         intro.font = .systemFont(ofSize: 11)
         intro.textColor = .secondaryLabelColor
 
+        // Column widths sum to the table width (560 − 2×16 margins − 2×1
+        // intercell gaps = 526) so nothing overflows the right edge and the
+        // header dividers line up with the cell content below them.
         let nameColumn = NSTableColumn(identifier: .init("name"))
         nameColumn.title = "Agent"
-        nameColumn.width = 170
+        nameColumn.width = 186
+        nameColumn.minWidth = 150
         let statusColumn = NSTableColumn(identifier: .init("status"))
-        statusColumn.title = "检测 / 接入"
-        statusColumn.width = 170
+        statusColumn.title = L10n.text(.hooksColStatus)
+        statusColumn.width = 190
+        statusColumn.minWidth = 150
         let actionColumn = NSTableColumn(identifier: .init("action"))
-        actionColumn.title = "操作"
+        actionColumn.title = L10n.text(.hooksColAction)
         actionColumn.width = 150
+        actionColumn.minWidth = 110
         tableView.addTableColumn(nameColumn)
         tableView.addTableColumn(statusColumn)
         tableView.addTableColumn(actionColumn)
         tableView.headerView = NSTableHeaderView()
-        tableView.rowHeight = 30
+        tableView.rowHeight = 32
+        tableView.intercellSpacing = NSSize(width: 1, height: 0)
+        tableView.columnAutoresizingStyle = .lastColumnOnlyAutoresizingStyle
         tableView.dataSource = self
         tableView.delegate = self
         tableView.usesAlternatingRowBackgroundColors = true
@@ -65,9 +72,9 @@ final class AgentHooksWindowController: NSWindowController {
         statusLabel.textColor = .secondaryLabelColor
         statusLabel.maximumNumberOfLines = 3
 
-        let refreshButton = NSButton(title: "重新检测", target: self, action: #selector(refresh))
+        let refreshButton = NSButton(title: L10n.text(.hooksRefresh), target: self, action: #selector(refresh))
         refreshButton.bezelStyle = .rounded
-        let closeButton = NSButton(title: "关闭", target: self, action: #selector(closeWindow))
+        let closeButton = NSButton(title: L10n.text(.hooksClose), target: self, action: #selector(closeWindow))
         closeButton.bezelStyle = .rounded
         let buttons = NSStackView(views: [refreshButton, NSView(), closeButton])
         buttons.orientation = .horizontal
@@ -130,10 +137,10 @@ final class AgentHooksWindowController: NSWindowController {
         guard let detection = detections.first(where: { $0.target == target }) else { return }
         guard detection.detected else {
             let alert = NSAlert()
-            alert.messageText = "未检测到 \(target.displayName)"
-            alert.informativeText = "请先安装该软件，再回来接入灯效。"
-            alert.addButton(withTitle: "打开下载页")
-            alert.addButton(withTitle: "取消")
+            alert.messageText = L10n.text(.hooksNotDetectedTitle) + target.displayName
+            alert.informativeText = L10n.text(.hooksInstallFirst)
+            alert.addButton(withTitle: L10n.text(.openDownloadPage))
+            alert.addButton(withTitle: L10n.text(.cancel))
             if alert.runModal() == .alertFirstButtonReturn,
                let url = URL(string: target.downloadURL) {
                 NSWorkspace.shared.open(url)
@@ -151,7 +158,7 @@ final class AgentHooksWindowController: NSWindowController {
         guard target.usesClaudeJSONContract, let relative = target.settingsRelativePath else {
             // Unreachable for the current target list (qwenwork/dsh handled
             // above); kept as a defensive guard for future targets.
-            statusLabel.stringValue = "\(target.displayName) 暂不支持本地配置安装。"
+            statusLabel.stringValue = target.displayName + L10n.text(.hooksUnsupportedLocal)
             return
         }
         let home = FileManager.default.homeDirectoryForCurrentUser
@@ -165,7 +172,7 @@ final class AgentHooksWindowController: NSWindowController {
             let written = try Data(contentsOf: settingsURL)
             let root = try JSONSerialization.jsonObject(with: written) as? [String: Any] ?? [:]
             guard DialHookInstaller.containsMarker(in: root) else {
-                statusLabel.stringValue = "读回校验失败：标记条目缺失。"
+                statusLabel.stringValue = L10n.text(.hooksReadbackFailed)
                 return
             }
             if target == .codex {
@@ -177,12 +184,12 @@ final class AgentHooksWindowController: NSWindowController {
                         new: Data(updated.utf8), at: configURL
                     )
                 }
-                statusLabel.stringValue = "已接入 Codex。请在 Codex 内运行 /hooks 批准各条目后生效。"
+                statusLabel.stringValue = L10n.text(.hooksCodexConnected)
             } else {
-                statusLabel.stringValue = "已接入 \(target.displayName)。重启该 Agent 的会话后生效。"
+                statusLabel.stringValue = target.displayName + L10n.text(.hooksConnectedRestart)
             }
         } catch {
-            statusLabel.stringValue = "安装失败：\(error.localizedDescription)"
+            statusLabel.stringValue = L10n.text(.hooksInstallFailed) + error.localizedDescription
         }
         refresh()
     }
@@ -191,7 +198,7 @@ final class AgentHooksWindowController: NSWindowController {
         if target == .qwenwork {
             onStopQwenWorkListener?()
             qwenWorkListenerActive = false
-            statusLabel.stringValue = "已停止本机监听。请到企业管理后台（安全管控 → Hooks 规则）清空对应事件的 dialpilot 配置。"
+            statusLabel.stringValue = L10n.language == .chinese ? "已停止本机监听。请到企业管理后台（安全管控 → Hooks 规则）清空对应事件的 dialpilot 配置。" : "Listener stopped. Clear the dialpilot rules in the enterprise console (Security Controls → Hooks Rules)."
             refresh()
             return
         }
@@ -203,18 +210,18 @@ final class AgentHooksWindowController: NSWindowController {
         let settingsURL = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(relative)
         guard let existing = try? Data(contentsOf: settingsURL) else {
-            statusLabel.stringValue = "没有配置文件，无需卸载。"
+            statusLabel.stringValue = L10n.text(.hooksNoConfig)
             return
         }
         do {
             guard let unmerged = try DialHookInstaller.unmergedSettings(existing: existing) else {
-                statusLabel.stringValue = "未找到 dialpilot 条目，无需卸载。"
+                statusLabel.stringValue = L10n.text(.hooksNoMarker)
                 return
             }
             try writeWithBackup(existing: existing, new: unmerged, at: settingsURL)
-            statusLabel.stringValue = "已卸载 \(target.displayName) 的灯效 hooks（其余配置保留）。"
+            statusLabel.stringValue = target.displayName + L10n.text(.hooksRemoved)
         } catch {
-            statusLabel.stringValue = "卸载失败：\(error.localizedDescription)"
+            statusLabel.stringValue = L10n.text(.hooksUninstallFailed) + error.localizedDescription
         }
         refresh()
     }
@@ -227,23 +234,23 @@ final class AgentHooksWindowController: NSWindowController {
             if uninstall {
                 guard let existing,
                       let unmerged = DialHookInstaller.unmergedDshPatch(existing: existing) else {
-                    statusLabel.stringValue = "未找到 dialpilot 条目，无需卸载。"
+                    statusLabel.stringValue = L10n.text(.hooksNoMarker)
                     return
                 }
                 try writeWithBackup(existing: Data(existing.utf8), new: Data(unmerged.utf8), at: settingsURL)
-                statusLabel.stringValue = "已卸载 DSH 灯效 hooks。"
+                statusLabel.stringValue = L10n.text(.hooksDshRemoved)
             } else {
                 let merged = DialHookInstaller.mergedDshPatch(existing: existing, ctlPath: ctlPath())
                 try writeWithBackup(existing: existing.map { Data($0.utf8) }, new: Data(merged.utf8), at: settingsURL)
                 let written = try String(contentsOf: settingsURL, encoding: .utf8)
                 guard written.contains("- id: \(DialHookInstaller.dshMarkerID)") else {
-                    statusLabel.stringValue = "读回校验失败：DSH 标记条目缺失。"
+                    statusLabel.stringValue = L10n.text(.hooksDshReadbackFailed)
                     return
                 }
-                statusLabel.stringValue = "已接入 DeepSeek Harness。重启 dsh 后生效。"
+                statusLabel.stringValue = L10n.text(.hooksDshConnected)
             }
         } catch {
-            statusLabel.stringValue = "DSH 写入失败：\(error.localizedDescription)"
+            statusLabel.stringValue = L10n.text(.hooksDshWriteFailed) + error.localizedDescription
         }
         refresh()
     }
@@ -262,8 +269,8 @@ final class AgentHooksWindowController: NSWindowController {
         // Install = start the loopback listener, then hand over console JSON.
         guard let token = onStartQwenWorkListener?() else {
             let alert = NSAlert()
-            alert.messageText = "千问办公监听启动失败"
-            alert.informativeText = "无法在 127.0.0.1:27950 启动本机监听（端口可能被占用）。请关闭占用程序后重试。"
+            alert.messageText = L10n.text(.qwenListenerFailedTitle)
+            alert.informativeText = L10n.text(.qwenListenerFailedBody)
             alert.runModal()
             return
         }
@@ -273,24 +280,16 @@ final class AgentHooksWindowController: NSWindowController {
             .compactMap { event in snippets[event].map { "// \(event)\n\($0)" } }
             .joined(separator: "\n\n")
         let alert = NSAlert()
-        alert.messageText = "千问办公接入（企业旗舰版）"
-        alert.informativeText = """
-        本机监听已启动（127.0.0.1:27950/qwenwork，仅回环）。
-
-        千问办公的 hooks 只能在企业管理后台配置（组织与安全 → 安全管控 → Hooks 规则），且仅支持 HTTP 类型。点「复制配置」后，到后台为下列事件分别粘贴：SessionStart、UserPromptSubmit、PreToolUse、PostToolUse、Stop、Notification、PreCompact。
-
-        \(DialQwenWorkHookHandler.personalEditionNotice)
-
-        卸载时监听会停止，并请同步到后台清空对应规则。
-        """
-        alert.addButton(withTitle: "复制配置")
-        alert.addButton(withTitle: "关闭")
+        alert.messageText = L10n.text(.qwenGuideTitle)
+        alert.informativeText = L10n.text(.qwenGuideBody)
+        alert.addButton(withTitle: L10n.text(.qwenCopyConfig))
+        alert.addButton(withTitle: L10n.text(.hooksClose))
         if alert.runModal() == .alertFirstButtonReturn {
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(text, forType: .string)
-            statusLabel.stringValue = "监听已启动，配置已复制；请到企业管理后台粘贴。"
+            statusLabel.stringValue = L10n.text(.qwenCopied)
         } else {
-            statusLabel.stringValue = "监听已启动；可随时点「复制配置」重新获取后台配置。"
+            statusLabel.stringValue = L10n.text(.qwenListenerStarted)
         }
         refresh()
     }
@@ -306,40 +305,66 @@ extension AgentHooksWindowController: NSTableViewDataSource, NSTableViewDelegate
         switch tableColumn?.identifier.rawValue {
         case "name":
             let label = NSTextField(labelWithString: detection.target.displayName)
-            label.font = .systemFont(ofSize: 12)
-            return label
+            label.font = .systemFont(ofSize: 12, weight: .medium)
+            return padded(label, leading: 8, trailing: 4)
         case "status":
             let label: NSTextField
             if detection.installed {
-                label = NSTextField(labelWithString: "已接入 ✓")
+                label = NSTextField(labelWithString: L10n.text(.hooksConnected))
                 label.textColor = PanelTheme.ok
             } else if detection.detected {
-                label = NSTextField(labelWithString: "已安装 · 未接入")
+                label = NSTextField(labelWithString: L10n.text(.hooksInstalledNotConnected))
                 label.textColor = .secondaryLabelColor
             } else {
-                label = NSTextField(labelWithString: "未检测到该软件")
+                label = NSTextField(labelWithString: L10n.text(.hooksNotDetected))
                 label.textColor = PanelTheme.warn
             }
             label.font = PanelTheme.captionFont
-            return label
+            return padded(label, leading: 4, trailing: 4)
         case "action":
             let button: NSButton
             if detection.installed {
-                button = NSButton(title: "卸载", target: self, action: #selector(uninstallClicked(_:)))
+                button = NSButton(title: L10n.text(.hooksUninstall), target: self, action: #selector(uninstallClicked(_:)))
                 button.contentTintColor = .secondaryLabelColor
             } else {
-                button = NSButton(title: "接入", target: self, action: #selector(installClicked(_:)))
+                button = NSButton(title: L10n.text(.hooksInstall), target: self, action: #selector(installClicked(_:)))
                 button.isEnabled = detection.detected
-                button.toolTip = detection.detected ? "备份原配置后只新增 dialpilot 标记的 hooks" : "先安装该软件才能接入"
+                button.toolTip = detection.detected ? L10n.text(.hooksInstallTooltip) : L10n.text(.hooksInstallFirstTooltip)
             }
             button.bezelStyle = .rounded
             button.controlSize = .small
             button.tag = row
             button.font = PanelTheme.captionFont
-            return button
+            // Center the button in its column with breathing room on both
+            // sides — it used to sit flush against the right edge.
+            button.translatesAutoresizingMaskIntoConstraints = false
+            let container = NSView()
+            container.addSubview(button)
+            NSLayoutConstraint.activate([
+                button.centerXAnchor.constraint(equalTo: container.centerXAnchor),
+                button.centerYAnchor.constraint(equalTo: container.centerYAnchor),
+                button.leadingAnchor.constraint(greaterThanOrEqualTo: container.leadingAnchor, constant: 8),
+                button.trailingAnchor.constraint(lessThanOrEqualTo: container.trailingAnchor, constant: -8),
+            ])
+            return container
         default:
             return nil
         }
+    }
+
+    /// Wraps a label so cell text starts at a fixed inset instead of
+    /// hugging the column divider (the left "empty band" in the screenshot
+    /// was the header inset not matching the cell inset).
+    private func padded(_ label: NSTextField, leading: CGFloat, trailing: CGFloat) -> NSView {
+        label.translatesAutoresizingMaskIntoConstraints = false
+        let container = NSView()
+        container.addSubview(label)
+        NSLayoutConstraint.activate([
+            label.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: leading),
+            label.trailingAnchor.constraint(lessThanOrEqualTo: container.trailingAnchor, constant: -trailing),
+            label.centerYAnchor.constraint(equalTo: container.centerYAnchor),
+        ])
+        return container
     }
 
     @objc private func installClicked(_ sender: NSButton) {

@@ -161,3 +161,59 @@ final class DialCodexAndDshInstallerTests: XCTestCase {
         XCTAssertTrue(DialHookInstaller.containsMarker(in: root))
     }
 }
+/// Session visibility: winner identity, agent attribution, detail list.
+final class DialLedSessionVisibilityTests: XCTestCase {
+    func testWinningSessionCarriesAgentAndID() {
+        var agg = DialLedSessionAggregator()
+        _ = agg.record(session: "s1", state: .working, now: 100, agent: "codebuddy")
+        _ = agg.record(session: "s2", state: .notification, now: 101, agent: "claude-code")
+        let winner = agg.winningSession(now: 102)
+        XCTAssertEqual(winner?.id, "s2")
+        XCTAssertEqual(winner?.session.agent, "claude-code")
+        XCTAssertEqual(winner?.session.state, .notification)
+    }
+
+    func testAgentSurvivesEventWithoutAgent() {
+        var agg = DialLedSessionAggregator()
+        _ = agg.record(session: "s1", state: .working, now: 100, agent: "qoder")
+        _ = agg.record(session: "s1", state: .thinking, now: 101)
+        XCTAssertEqual(agg.sessions["s1"]?.agent, "qoder")
+    }
+
+    func testActiveSessionsWinnerFirstThenPriority() {
+        var agg = DialLedSessionAggregator()
+        _ = agg.record(session: "idle-one", state: .idle, now: 100, agent: "codex")
+        _ = agg.record(session: "worker", state: .working, now: 101, agent: "codebuddy")
+        _ = agg.record(session: "approver", state: .notification, now: 102, agent: "claude-code")
+        let list = agg.activeSessions(now: 103)
+        XCTAssertEqual(list.map(\.id), ["approver", "worker", "idle-one"])
+        XCTAssertEqual(list.filter(\.isWinning).count, 1)
+        XCTAssertEqual(list.first?.ageSeconds, 1)
+    }
+
+    func testStaleSessionsExcludedFromDetail() {
+        var agg = DialLedSessionAggregator(staleInterval: 120)
+        _ = agg.record(session: "old", state: .error, now: 0, agent: "dsh")
+        _ = agg.record(session: "new", state: .working, now: 200, agent: "codebuddy")
+        let list = agg.activeSessions(now: 201)
+        XCTAssertEqual(list.map(\.id), ["new"])
+        XCTAssertEqual(agg.resolvedState(now: 201), .working)
+    }
+
+    func testTieBreaksOnMostRecentThenID() {
+        var agg = DialLedSessionAggregator()
+        _ = agg.record(session: "a", state: .working, now: 100)
+        _ = agg.record(session: "b", state: .working, now: 105)
+        XCTAssertEqual(agg.winningSession(now: 106)?.id, "b")
+        _ = agg.record(session: "a", state: .working, now: 105)
+        // Same priority, same lastSeen: deterministic — smaller id wins.
+        XCTAssertEqual(agg.winningSession(now: 106)?.id, "a")
+    }
+
+    func testEmptyAggregatorHasNoWinner() {
+        let agg = DialLedSessionAggregator()
+        XCTAssertNil(agg.winningSession(now: 100))
+        XCTAssertTrue(agg.activeSessions(now: 100).isEmpty)
+        XCTAssertEqual(agg.resolvedState(now: 100), .idle)
+    }
+}

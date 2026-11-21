@@ -1,5 +1,6 @@
 import Foundation
 import IOKit.hid
+import DialPilotCore
 
 enum IOHIDListenAccessError: LocalizedError {
     case denied
@@ -8,9 +9,9 @@ enum IOHIDListenAccessError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .denied:
-            "输入监控权限已被拒绝。请到「系统设置 → 隐私权与安全性 → 输入监控」允许 DialPilot。"
+            L10n.text(.errInputDenied)
         case .permissionRequired:
-            "已要求输入监控权限。允许 DialPilot 后，请按「套用并重启」。"
+            L10n.text(.errInputPrompt)
         }
     }
 }

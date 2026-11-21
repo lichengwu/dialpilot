@@ -32,14 +32,15 @@ public enum DialAgentTarget: String, CaseIterable, Codable, Sendable {
     case qwenwork
 
     public var displayName: String {
+        let zh = L10n.language == .chinese
         switch self {
         case .claudeCode: return "Claude Code"
-        case .qwenCode: return "Qwen Code（千问 CLI）"
+        case .qwenCode: return zh ? "Qwen Code（千问 CLI）" : "Qwen Code"
         case .qoder: return "Qoder"
         case .codebuddy: return "CodeBuddy"
         case .codex: return "Codex"
         case .dsh: return "DeepSeek Harness"
-        case .qwenwork: return "千问办公 QwenWork"
+        case .qwenwork: return zh ? "千问办公 QwenWork" : "QwenWork"
         }
     }
 
@@ -125,11 +126,11 @@ public enum DialHookInstallerError: Error, Equatable, LocalizedError {
     public var errorDescription: String? {
         switch self {
         case let .agentNotDetected(name):
-            "未检测到 \(name)。请先安装该软件，再回来接入灯效。"
+            return name + L10n.text(.errAgentNotDetected)
         case .invalidExistingJSON:
-            "现有配置文件不是合法 JSON；已保留原文件，未做任何修改。"
+            return L10n.text(.errInvalidJSON)
         case let .unsupportedTarget(name):
-            "\(name) 使用特殊接入流程，不走本地配置安装。"
+            return name + L10n.text(.errUnsupportedTarget)
         }
     }
 }

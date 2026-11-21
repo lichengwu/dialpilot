@@ -88,7 +88,7 @@ final class CtlSocketServer {
         defer { close(client) }
         guard received > 0,
               let request = DialCtlProtocol.decodeRequest(Data(buffer.prefix(received))) else {
-            reply(client, .init(ok: false, error: "无法解析请求"))
+            reply(client, .init(ok: false, error: L10n.text(.errParseRequest)))
             return
         }
         let response = handler(request)

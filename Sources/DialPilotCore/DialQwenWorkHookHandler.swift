@@ -72,7 +72,7 @@ public struct DialQwenWorkHookHandler {
         let session = (payload["session_id"] as? String)
             ?? (payload["sessionId"] as? String)
             ?? "qwenwork-default"
-        let resolved = aggregator.record(session: session, state: state, now: now)
+        let resolved = aggregator.record(session: session, state: state, now: now, agent: "qwenwork")
         return Response(statusCode: 200, body: "{}", resolvedState: resolved)
     }
 

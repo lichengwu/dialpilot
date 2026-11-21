@@ -44,10 +44,27 @@ final class LedRenderer {
     }
 
     /// Requests a state change. Debounce/bypass rules live in the Engine.
+    /// Ignored while a static light mode (All On / Off) owns the LEDs.
     func request(_ state: DialAgentState) {
+        guard !staticMode else { return }
         let plans = engine.request(state, now: Self.now())
         deliver(plans)
     }
+
+    /// Writes a static table directly (All On / Off light modes), bypassing
+    /// the agent engine. The engine's animation timers keep running but its
+    /// writes are suppressed while a static mode is active (see `staticMode`).
+    func applyStatic(_ table: DialLedState, completion: ((Error?) -> Void)? = nil) {
+        let expected = engine.deviceState
+        apply(table, expected, true) { [weak self] error in
+            if error == nil { self?.engine.confirmDeviceState(table) }
+            completion?(error)
+        }
+    }
+
+    /// When true, agent-driven requests/ticks are ignored (static mode owns
+    /// the LEDs). The app delegate sets this from configuration.lightMode.
+    var staticMode = false
 
     /// Disables rendering and restores the factory baseline (app quit / off).
     func shutdown(completion: (() -> Void)? = nil) {
@@ -84,7 +101,7 @@ final class LedRenderer {
 
     private func startTickTimer() {
         let timer = Timer(timeInterval: Self.tickInterval, repeats: true) { [weak self] _ in
-            guard let self else { return }
+            guard let self, !self.staticMode else { return }
             let plans = self.engine.tick(now: Self.now())
             self.deliver(plans)
         }

@@ -1,5 +1,5 @@
 #!/bin/sh
-# DialPilot 一键验收脚本（灯效 + QwenWork + 自动切组回归）
+# DialPilot 一键验收脚本（灯效 + QwenWork + 单组按键回归）
 #
 # 用法:
 #   ./scripts/acceptance.sh offline     # 离线：swift test 跑全部自动断言（mock 设备，不碰硬件）
@@ -17,7 +17,7 @@ cd "$PROJECT_DIR"
 
 echo "=== 阶段 0：自动断言（离线 mock，全部可机器判定）==="
 swift test --disable-sandbox --filter DialAcceptanceHarnessTests 2>&1 | grep -E "Test Suite 'DialAcceptanceHarnessTests'|Executed [0-9]+ tests" | tail -3
-echo "自动断言覆盖：A1-A6 六状态帧契约 / B1-B3 QwenWork 映射+鉴权+仲裁 / C1-C2 切组决策+防抖回滚 / D1 基线恢复"
+echo "自动断言覆盖：A1-A6 六状态帧契约 / B1-B3 QwenWork 映射+鉴权+仲裁 / D1 基线恢复"
 echo ""
 
 if [ "$MODE" = "offline" ]; then
@@ -71,8 +71,8 @@ echo "=== 阶段 B：QwenWork 端到端（B4 人工操作）==="
 pause_for_user "B4：App 设置→Agent 灯效接入→QwenWork 点安装→复制配置→企业管理后台（安全管控→Hooks 规则）粘贴 7 事件→在千问办公跑一轮任务观察灯；完成后点卸载并清空后台规则。个人版无 hooks 能力则跳过（输入 s）"
 
 echo ""
-echo "=== 阶段 C：自动切组回归（C3 人工操作）==="
-pause_for_user "C3：在 config.json 配置 appProfileMapping（参考 README 示例）后重启 App，切换前台 App 并按旋钮/三键确认动作随组变化；⌘Tab 快速切换不应连环切组。未配置映射则跳过（输入 s）"
+echo "=== 阶段 C：单组按键回归（C3 人工操作）==="
+pause_for_user "C3：按旋钮单按/双按与三键，确认动作与面板设置一致；旋钮双按默认不做事，可在面板改绑"
 
 echo ""
 echo "=== 阶段 D：收尾（D2 人工操作）==="

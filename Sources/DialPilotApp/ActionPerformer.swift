@@ -10,15 +10,11 @@ enum ActionPerformerError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case let .unsupportedAction(name):
-            "无法送出「\(name)」。"
-        case let .unsupportedShortcutEntry(entry):
-            String(
-                format: "无法送出快捷键数据（page 0x%02X、value 0x%02X）。",
-                entry.pageAndSign,
-                entry.value
-            )
+            L10n.text(.actionSendFailed) + name + (L10n.language == .chinese ? "」。" : ".")
+        case .unsupportedShortcutEntry:
+            L10n.text(.actionShortcutDataFailed)
         case .eventCreationFailed:
-            "macOS 无法建立键盘事件。"
+            L10n.text(.actionKeyboardEventFailed)
         }
     }
 }
@@ -41,7 +37,7 @@ final class ActionPerformer {
         guard pressed[control] == nil else { return }
 
         switch try resolve(binding) {
-        case .none, .switchProfile:
+        case .none:
             return
         case .fnDoubleTap:
             try postFunctionKeyTap()
@@ -101,14 +97,12 @@ final class ActionPerformer {
         case media(Int32)
         case fnDoubleTap
         case voiceInput
-        case switchProfile
     }
 
     private func resolve(_ binding: ControlBinding) throws -> ResolvedBinding {
         let nativeAction: NativeHardwareAction
         switch binding {
         case let .preset(action):
-            if action == .switchProfile { return .switchProfile }
             if action == .fnDoubleTap { return .fnDoubleTap }
             if action == .voiceInput { return .voiceInput }
             nativeAction = PresetNativeShortcutResolver.resolve(action)

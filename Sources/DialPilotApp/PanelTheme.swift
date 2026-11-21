@@ -1,7 +1,7 @@
 import AppKit
 import DialPilotCore
 
-/// Shared visual language for DialPilot's popover and windows.
+/// Shared visual language for DialPilot's panel and windows.
 /// Light/dark adaptive via semantic NSColors; one accent (system blue)
 /// for interactive emphasis, green/orange reserved for status semantics.
 enum PanelTheme {

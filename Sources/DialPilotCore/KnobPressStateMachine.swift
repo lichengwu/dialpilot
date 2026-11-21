@@ -1,31 +1,28 @@
 import Foundation
 
 public enum KnobPressDecision: Equatable, Sendable {
-    case scheduleLongPress(after: TimeInterval)
     case scheduleSinglePress(after: TimeInterval)
     case cancelPendingSinglePress
     case performSinglePress
     case performDoublePress
-    case longPressRecognized
-    case switchProfile
 }
 
-/// Distinguishes one click, two clicks, and a 0.65-second hold without ever
-/// firing the single-click action before the double-click window has closed.
+/// Distinguishes one click from two clicks without ever firing the
+/// single-click action before the double-click window has closed.
+///
+/// The 0.65 s long-press gesture is gone. It existed
+/// only to switch between the AI and System profiles; with a single
+/// profile there is nothing to switch to, so the hold timer and its
+/// two decisions (`longPressRecognized` / `switchProfile`) were removed
+/// rather than left as dead paths.
 public struct KnobPressStateMachine: Equatable, Sendable {
-    public let longPressThreshold: TimeInterval
     public let doublePressInterval: TimeInterval
 
     private var pressedAt: TimeInterval?
     private var firstReleasedAt: TimeInterval?
     private var isSecondPress = false
-    private var longPressWasRecognized = false
 
-    public init(
-        longPressThreshold: TimeInterval = 0.65,
-        doublePressInterval: TimeInterval = 0.28
-    ) {
-        self.longPressThreshold = longPressThreshold
+    public init(doublePressInterval: TimeInterval = 0.28) {
         self.doublePressInterval = doublePressInterval
     }
 
@@ -47,21 +44,14 @@ public struct KnobPressStateMachine: Equatable, Sendable {
         }
 
         pressedAt = timestamp
-        longPressWasRecognized = false
-        decisions.append(.scheduleLongPress(after: longPressThreshold))
         return decisions
     }
 
     public mutating func pressUp(at timestamp: TimeInterval) -> [KnobPressDecision] {
-        guard let pressedAt else { return [] }
-
-        let elapsed = max(0, timestamp - pressedAt)
+        // A release without a matching press is noise (or a re-sent report
+        // after reconnect) and must not arm the single-press timer.
+        guard pressedAt != nil else { return [] }
         self.pressedAt = nil
-
-        if longPressWasRecognized || reachedLongPressThreshold(elapsed) {
-            clearClickCycle()
-            return [.cancelPendingSinglePress, .switchProfile]
-        }
 
         if isSecondPress {
             clearClickCycle()
@@ -78,13 +68,6 @@ public struct KnobPressStateMachine: Equatable, Sendable {
         return .performSinglePress
     }
 
-    public mutating func longPressTimerFired() -> [KnobPressDecision] {
-        guard pressedAt != nil, !longPressWasRecognized else { return [] }
-        longPressWasRecognized = true
-        firstReleasedAt = nil
-        return [.cancelPendingSinglePress, .longPressRecognized]
-    }
-
     public mutating func reset() {
         pressedAt = nil
         clearClickCycle()
@@ -93,10 +76,5 @@ public struct KnobPressStateMachine: Equatable, Sendable {
     private mutating func clearClickCycle() {
         firstReleasedAt = nil
         isSecondPress = false
-        longPressWasRecognized = false
-    }
-
-    private func reachedLongPressThreshold(_ elapsed: TimeInterval) -> Bool {
-        elapsed + 1e-9 >= longPressThreshold
     }
 }

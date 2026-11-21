@@ -6,8 +6,8 @@ public enum ProfileID: String, CaseIterable, Codable, Sendable {
 
     public var displayName: String {
         switch self {
-        case .a: "AI"
-        case .b: "系统"
+        case .a: L10n.text(.profileAI)
+        case .b: L10n.text(.profileSystem)
         }
     }
 
@@ -27,13 +27,13 @@ public enum InputControl: String, CaseIterable, Codable, CodingKey, Sendable {
 
     public var displayName: String {
         switch self {
-        case .knobPress: "旋钮单按"
-        case .knobDoublePress: "旋钮双按"
-        case .knobLeft: "旋钮向左"
-        case .knobRight: "旋钮向右"
-        case .topButton: "上键"
-        case .middleButton: "中键"
-        case .bottomButton: "下键"
+        case .knobPress: L10n.language == .chinese ? "旋钮单按" : "Knob press"
+        case .knobDoublePress: L10n.language == .chinese ? "旋钮双按" : "Knob double"
+        case .knobLeft: L10n.language == .chinese ? "旋钮向左" : "Knob left"
+        case .knobRight: L10n.language == .chinese ? "旋钮向右" : "Knob right"
+        case .topButton: L10n.language == .chinese ? "上键" : "Top button"
+        case .middleButton: L10n.language == .chinese ? "中键" : "Middle button"
+        case .bottomButton: L10n.language == .chinese ? "下键" : "Bottom button"
         }
     }
 
@@ -95,7 +95,6 @@ public enum KeyAction: String, CaseIterable, Codable, Sendable {
     case spotlight
     case screenshot
     case missionControl
-    case switchProfile
     case volumeUp
     case volumeDown
     case mute
@@ -106,58 +105,58 @@ public enum KeyAction: String, CaseIterable, Codable, Sendable {
     case playPause
 
     public var displayName: String {
+        let zh = L10n.language == .chinese
         switch self {
-        case .none: "不做事"
-        case .space: "Space"
-        case .returnKey: "Return"
-        case .escape: "Escape"
-        case .tab: "Tab"
-        case .fnDoubleTap: "Fn 按两次（App 开启时）"
-        case .voiceInput: "语音输入（按住说話，自动切微信输入法）"
-        case .optionKey: "左 Option"
-        case .rightOptionKey: "右 Option"
-        case .leftArrow: "方向键 ←"
-        case .rightArrow: "方向键 →"
-        case .upArrow: "方向键 ↑"
-        case .downArrow: "方向键 ↓"
-        case .deleteBackward: "Delete／Backspace"
-        case .deleteForward: "Forward Delete"
-        case .home: "Home"
-        case .end: "End"
-        case .pageUp: "Page Up"
-        case .pageDown: "Page Down"
-        case .f1: "F1"
-        case .f2: "F2"
-        case .f3: "F3"
-        case .f4: "F4"
-        case .f5: "F5"
-        case .f6: "F6"
-        case .f7: "F7"
-        case .f8: "F8"
-        case .f9: "F9"
-        case .f10: "F10"
-        case .f11: "F11"
-        case .f12: "F12"
-        case .selectAll: "⌘A（全选）"
-        case .copy: "⌘C（复制）"
-        case .paste: "⌘V（粘贴）"
-        case .cut: "⌘X（剪切）"
-        case .undo: "⌘Z（复原）"
-        case .redo: "⌘⇧Z（重做）"
-        case .save: "⌘S（储存）"
-        case .appSwitcher: "⌘Tab（切换 App）"
-        case .spotlight: "⌘Space（Spotlight）"
-        case .screenshot: "⌘⇧5（截图）"
-        case .missionControl: "⌃↑（Mission Control）"
-        case .switchProfile: "切换 AI／系统"
-        case .volumeUp: "音量提高"
-        case .volumeDown: "音量降低"
-        case .mute: "静音"
-        case .brightnessUp: "亮度提高"
-        case .brightnessDown: "亮度降低"
-        case .previousTrack: "上一首"
-        case .nextTrack: "下一首"
-        case .playPause: "播放／暂停"
+        case .none: return zh ? "不做事" : "Do nothing"
+        case .space: return "Space"
+        case .returnKey: return "Return"
+        case .escape: return "Escape"
+        case .tab: return "Tab"
+        case .fnDoubleTap: return zh ? "Fn 按两次（App 开启时）" : "Fn double-tap (app running)"
+        case .voiceInput: return zh ? "语音输入（按住说话，自动切微信输入法）" : "Voice input (hold to talk, WeChat IME)"
+        case .optionKey: return zh ? "左 Option" : "Left Option"
+        case .rightOptionKey: return zh ? "右 Option" : "Right Option"
+        case .leftArrow: return zh ? "方向键 ←" : "Arrow ←"
+        case .rightArrow: return zh ? "方向键 →" : "Arrow →"
+        case .upArrow: return zh ? "方向键 ↑" : "Arrow ↑"
+        case .downArrow: return zh ? "方向键 ↓" : "Arrow ↓"
+        case .deleteBackward: return "Delete／Backspace"
+        case .deleteForward: return "Forward Delete"
+        case .home: return "Home"
+        case .end: return "End"
+        case .pageUp: return "Page Up"
+        case .pageDown: return "Page Down"
+        case .f1: return "F1"
+        case .f2: return "F2"
+        case .f3: return "F3"
+        case .f4: return "F4"
+        case .f5: return "F5"
+        case .f6: return "F6"
+        case .f7: return "F7"
+        case .f8: return "F8"
+        case .f9: return "F9"
+        case .f10: return "F10"
+        case .f11: return "F11"
+        case .f12: return "F12"
+        case .selectAll: return zh ? "⌘A（全选）" : "⌘A (Select All)"
+        case .copy: return zh ? "⌘C（复制）" : "⌘C (Copy)"
+        case .paste: return zh ? "⌘V（粘贴）" : "⌘V (Paste)"
+        case .cut: return zh ? "⌘X（剪切）" : "⌘X (Cut)"
+        case .undo: return zh ? "⌘Z（撤销）" : "⌘Z (Undo)"
+        case .redo: return zh ? "⌘⇧Z（重做）" : "⌘⇧Z (Redo)"
+        case .save: return zh ? "⌘S（保存）" : "⌘S (Save)"
+        case .appSwitcher: return zh ? "⌘Tab（切换 App）" : "⌘Tab (App Switcher)"
+        case .spotlight: return "⌘Space (Spotlight)"
+        case .screenshot: return zh ? "⌘⇧5（截图）" : "⌘⇧5 (Screenshot)"
+        case .missionControl: return "⌃↑ (Mission Control)"
+                case .volumeUp: return zh ? "音量提高" : "Volume Up"
+        case .volumeDown: return zh ? "音量降低" : "Volume Down"
+        case .mute: return zh ? "静音" : "Mute"
+        case .brightnessUp: return zh ? "亮度提高" : "Brightness Up"
+        case .brightnessDown: return zh ? "亮度降低" : "Brightness Down"
+        case .previousTrack: return zh ? "上一首" : "Previous Track"
+        case .nextTrack: return zh ? "下一首" : "Next Track"
+        case .playPause: return zh ? "播放／暂停" : "Play / Pause"
         }
     }
 
@@ -174,7 +173,7 @@ public enum KeyAction: String, CaseIterable, Codable, Sendable {
             .functionKeys
         case .selectAll, .copy, .paste, .cut, .undo, .redo, .save:
             .editing
-        case .appSwitcher, .spotlight, .screenshot, .missionControl, .switchProfile:
+        case .appSwitcher, .spotlight, .screenshot, .missionControl:
             .system
         case .volumeUp, .volumeDown, .mute, .brightnessUp, .brightnessDown,
              .previousTrack, .nextTrack, .playPause:
@@ -203,6 +202,19 @@ public enum KeyActionCategory: String, CaseIterable, Sendable {
     case editing = "编辑"
     case system = "系统"
     case media = "媒体"
+
+    /// Localized heading for menus (rawValue stays stable for tests/config).
+    public var displayName: String {
+        let zh = L10n.language == .chinese
+        switch self {
+        case .basic: return zh ? "基本" : "Basic"
+        case .navigation: return zh ? "导航" : "Navigation"
+        case .functionKeys: return "F1–F12"
+        case .editing: return zh ? "编辑" : "Editing"
+        case .system: return zh ? "系统" : "System"
+        case .media: return zh ? "媒体" : "Media"
+        }
+    }
 }
 
 public enum ControlBinding: Codable, Equatable, Sendable {
@@ -219,8 +231,12 @@ public enum ControlBinding: Codable, Equatable, Sendable {
     }
 
     public init(from decoder: Decoder) throws {
-        if let action = try? decoder.singleValueContainer().decode(KeyAction.self) {
-            self = .preset(action)
+        // A plain string is a preset action. Unknown / removed actions
+        // (e.g. "switchProfile") degrade to .none instead of failing the
+        // whole config — the slot becomes "do nothing", rebinding is easy.
+        if let single = try? decoder.singleValueContainer(),
+           let raw = try? single.decode(String.self) {
+            self = .preset(KeyAction(rawValue: raw) ?? .none)
             return
         }
 
@@ -271,18 +287,23 @@ public struct ProfileConfiguration: Codable, Equatable, Sendable {
         set { mappings[control] = newValue }
     }
 
+    /// Equality is by effective binding: an absent control and an explicit
+    /// `.none` are the same thing ("do nothing"). Without this, a decoded
+    /// config (all seven controls materialized) would never equal a
+    /// freshly-built one (sparse map), breaking round-trip assertions.
+    public static func == (lhs: ProfileConfiguration, rhs: ProfileConfiguration) -> Bool {
+        InputControl.allCases.allSatisfy { lhs[$0] == rhs[$0] }
+    }
+
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: InputControl.self)
         var decoded: [InputControl: ControlBinding] = [:]
 
         for control in InputControl.allCases {
-            let fallback: ControlBinding = control == .knobDoublePress
-                ? .preset(.switchProfile)
-                : .preset(.none)
             decoded[control] = try container.decodeIfPresent(
                 ControlBinding.self,
                 forKey: control
-            ) ?? fallback
+            ) ?? .preset(.none)
         }
 
         mappings = decoded
@@ -306,6 +327,9 @@ public struct AppConfiguration: Codable, Equatable, Sendable {
     /// M1: frontmost-app bundleID → profile. Empty = feature off.
     /// Unmapped apps keep the current profile (no fallback switching).
     public var appProfileMapping: [String: ProfileID]
+    /// Light behavior: allOn/off mirror native global modes; smart follows
+    /// agent events. Defaults to smart; old configs decode as smart.
+    public var lightMode: DialLightMode
 
     public init(
         activeProfile: ProfileID = .a,
@@ -313,7 +337,8 @@ public struct AppConfiguration: Codable, Equatable, Sendable {
         profileA: ProfileConfiguration = .init(),
         profileB: ProfileConfiguration = .init(),
         needsHardwareSync: Bool = true,
-        appProfileMapping: [String: ProfileID] = [:]
+        appProfileMapping: [String: ProfileID] = [:],
+        lightMode: DialLightMode = .smart
     ) {
         self.activeProfile = activeProfile
         self.offlineProfile = offlineProfile
@@ -321,6 +346,7 @@ public struct AppConfiguration: Codable, Equatable, Sendable {
         self.profileB = profileB
         self.needsHardwareSync = needsHardwareSync
         self.appProfileMapping = appProfileMapping
+        self.lightMode = lightMode
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -330,6 +356,7 @@ public struct AppConfiguration: Codable, Equatable, Sendable {
         case profileB
         case needsHardwareSync
         case appProfileMapping
+        case lightMode
     }
 
     public init(from decoder: Decoder) throws {
@@ -352,6 +379,11 @@ public struct AppConfiguration: Codable, Equatable, Sendable {
             [String: ProfileID].self,
             forKey: .appProfileMapping
         ) ?? [:]
+        // Configs written before light modes existed default to smart.
+        lightMode = try container.decodeIfPresent(
+            DialLightMode.self,
+            forKey: .lightMode
+        ) ?? .smart
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -362,6 +394,7 @@ public struct AppConfiguration: Codable, Equatable, Sendable {
         try container.encode(profileB, forKey: .profileB)
         try container.encode(needsHardwareSync, forKey: .needsHardwareSync)
         try container.encode(appProfileMapping, forKey: .appProfileMapping)
+        try container.encode(lightMode, forKey: .lightMode)
     }
 
     public subscript(profile: ProfileID) -> ProfileConfiguration {
@@ -382,42 +415,39 @@ public struct AppConfiguration: Codable, Equatable, Sendable {
     public static var `default`: AppConfiguration {
         var profileA = ProfileConfiguration()
         profileA[.knobPress] = .preset(.selectAll)
-        profileA[.knobDoublePress] = .preset(.switchProfile)
+        profileA[.knobDoublePress] = .preset(.none)
         profileA[.knobLeft] = .preset(.downArrow)
         profileA[.knobRight] = .preset(.upArrow)
         profileA[.topButton] = .preset(.optionKey)
         profileA[.middleButton] = .preset(.returnKey)
         profileA[.bottomButton] = .preset(.tab)
 
-        var profileB = ProfileConfiguration()
-        profileB[.knobPress] = .preset(.appSwitcher)
-        profileB[.knobDoublePress] = .preset(.switchProfile)
-        profileB[.knobLeft] = .preset(.volumeDown)
-        profileB[.knobRight] = .preset(.volumeUp)
-        profileB[.topButton] = .preset(.playPause)
-        profileB[.middleButton] = .preset(.mute)
-        profileB[.bottomButton] = .preset(.appSwitcher)
-
+        // Single-profile product: profileB is retained only so old
+        // configs decode; it is never shown, switched to, or written.
         return AppConfiguration(
             activeProfile: .a,
-            profileA: profileA,
-            profileB: profileB
+            profileA: profileA
         )
     }
 
-    /// Version 0.3 briefly reserved the knob as F18. Restore the last known
-    /// pre-migration defaults so upgrading never leaves the sixth native slot dead.
+    /// One-time migrations that must leave the six native slots usable.
+    ///
+    /// The single-profile design removed the System profile and the
+    /// `switchProfile` action. Old configs that bound a control to it fail to
+    /// decode that binding and fall back to `.none` (see ControlBinding.init).
+    /// A config whose activeProfile is `.b` must be pulled back to `.a`, and
+    /// any auto-switch mapping is cleared — the feature is gone. The marker
+    /// is reset so the device gets one clean rewrite of the single profile.
     @discardableResult
     public mutating func restoreLegacyReservedKnobMappings() -> Bool {
-        let legacyBinding = ControlBinding.preset(KeyAction.switchProfile)
         var changed = false
 
-        if profileA[.knobPress] == legacyBinding {
-            profileA[.knobPress] = .preset(.selectAll)
+        if activeProfile != .a {
+            activeProfile = .a
             changed = true
         }
-        if profileB[.knobPress] == legacyBinding {
-            profileB[.knobPress] = .preset(.appSwitcher)
+        if !appProfileMapping.isEmpty {
+            appProfileMapping = [:]
             changed = true
         }
 

@@ -15,23 +15,25 @@ enum IOKitHardwareListenerError: LocalizedError {
     case ledWriteFailed(code: IOReturn)
 
     var errorDescription: String? {
+        let zh = L10n.language == .chinese
+        let close = zh ? "）。" : ")."
         switch self {
         case let .managerOpenFailed(code):
-            "无法开启 AU05 HID 监听器（\(Self.hex(code))）。"
+            return L10n.text(.errListenerOpen) + Self.hex(code) + close
         case let .heartbeatWriteFailed(code):
-            "AU05 在线模式中断（\(Self.hex(code))）；已退回设备原生按键。"
+            return L10n.text(.errHeartbeat) + Self.hex(code) + close
         case let .offlineWriteFailed(code):
-            "AU05 离线指令失败（\(Self.hex(code))）；请结束 App，等待设备自动恢复。"
+            return L10n.text(.errListenerOffline) + Self.hex(code) + close
         case .onlinePrerequisiteLost:
-            "进階手势已停止；AU05 已退回设备原生按键。"
+            return L10n.text(.errOnlineLost)
         case .invalidPowerSavingTransition:
-            "AU05 省电模式状态已改变；请重新启动 DialPilot。"
+            return L10n.text(.errPowerTransition)
         case .ledBusy:
-            "AU05 灯效操作正在进行中；请稍后再试。"
+            return L10n.text(.errLedBusy)
         case .ledTimeout:
-            "AU05 灯效命令超时；设备可能已休眠，按任意键唤醒后重试。"
+            return L10n.text(.errLedTimeout)
         case let .ledWriteFailed(code):
-            "AU05 灯效写入失败（\(Self.hex(code))）。"
+            return L10n.text(.errLedWrite) + Self.hex(code) + close
         }
     }
 
@@ -49,6 +51,9 @@ final class IOKitHardwareListener {
     private let noticeHandler: (DialDeviceNotice) -> Void
     private let powerSavingWakeHandler: () -> Void
     private let connectionHandler: (Bool) -> Void
+    /// Fires when the device stops/starts answering power queries while its
+    /// USB interface stays enumerated (knob switched off).
+    private let responsivenessHandler: (Bool) -> Void
     private let failureHandler: (Error) -> Void
     private let deviceRemovalHandler: () -> Void
     private let shouldRemainOnline: () -> Bool
@@ -62,6 +67,12 @@ final class IOKitHardwareListener {
     private var heartbeatTimer: Timer?
     private var heartbeatFailureReported = false
     private var heartbeatInFlight = false
+    private var heartbeatCount: UInt64 = 0
+    /// Piggyback a battery GET on every Nth heartbeat. 3 while the panel is
+    /// open (~2.4 s, live feel), 30 while closed (~24 s: two silent polls
+    /// then answer "powered off?" within a minute). 0 disables. The AU05 never pushes charge changes, so
+    /// without this the badge only updated when the user clicked the panel.
+    var powerPollEveryNHeartbeats: UInt64 = 30
     private var pendingLedAcks: [DialLedControl.Write] = []
     private var ledWriteCompletion: ((Error?) -> Void)?
     private var ledReadCompletion: ((DialLedState?, Error?) -> Void)?
@@ -69,6 +80,8 @@ final class IOKitHardwareListener {
     private var onlineGeneration: UInt64 = 0
     private var pressedControls: Set<InputControl> = []
     private var connected = false
+    private var liveness = DialDeviceLiveness()
+    private var lastPollSentAt: TimeInterval = 0
     private var isRunning = false
     private var parkedForPowerSaving = false
     private var wakeRequestDelivered = false
@@ -140,6 +153,7 @@ final class IOKitHardwareListener {
         noticeHandler: @escaping (DialDeviceNotice) -> Void,
         powerSavingWakeHandler: @escaping () -> Void,
         connectionHandler: @escaping (Bool) -> Void,
+        responsivenessHandler: @escaping (Bool) -> Void,
         failureHandler: @escaping (Error) -> Void,
         deviceRemovalHandler: @escaping () -> Void,
         shouldRemainOnline: @escaping () -> Bool
@@ -151,6 +165,7 @@ final class IOKitHardwareListener {
         self.noticeHandler = noticeHandler
         self.powerSavingWakeHandler = powerSavingWakeHandler
         self.connectionHandler = connectionHandler
+        self.responsivenessHandler = responsivenessHandler
         self.failureHandler = failureHandler
         self.deviceRemovalHandler = deviceRemovalHandler
         self.shouldRemainOnline = shouldRemainOnline
@@ -264,6 +279,7 @@ final class IOKitHardwareListener {
             reportID: reportID,
             report: bytes
         ) {
+            noteReplyReceived()
             deliverOnMain { [powerResponseHandler] in
                 powerResponseHandler(powerResponse)
             }
@@ -293,6 +309,9 @@ final class IOKitHardwareListener {
             return
         }
 
+        // A real gesture also proves the knob is awake, even if the power
+        // replies are still in flight.
+        noteReplyReceived()
         logger.notice("Raw AU05 event: \(String(describing: event), privacy: .public)")
         let timestamp = HIDMonotonicClock.now
         deliverOnMain { [eventHandler] in
@@ -310,6 +329,7 @@ final class IOKitHardwareListener {
         guard inputDevice == nil else { return }
         attachInputDevice(device)
         DebugLog.log("listener: input device attached")
+        resetLiveness()
 
         guard shouldRemainOnline() else {
             deliverOnMain { [failureHandler] in
@@ -413,6 +433,7 @@ final class IOKitHardwareListener {
         inputReportCapacity = 0
         pressedControls.removeAll(keepingCapacity: true)
         setConnected(false)
+        resetLiveness()
     }
 
     private func detachWakeDevice() {
@@ -661,6 +682,7 @@ final class IOKitHardwareListener {
 
     private func sendPowerQueriesAsynchronously() {
         guard let device = inputDevice else { return }
+        notePollSent()
         let reports = DialPowerQuery.allCases.compactMap {
             try? DialPacketCodec.powerQueryReport($0)
         }
@@ -756,9 +778,21 @@ final class IOKitHardwareListener {
 
         heartbeatInFlight = true
         let generation = onlineGeneration
+        heartbeatCount &+= 1
+        let pollEveryN = liveness.pollInterval(whileAlive: powerPollEveryNHeartbeats)
+        let pollPower = pollEveryN > 0 && heartbeatCount % pollEveryN == 0
+        let powerReports: [[UInt8]] = pollPower
+            ? DialPowerQuery.allCases.compactMap { try? DialPacketCodec.powerQueryReport($0) }
+            : []
+        if pollPower { notePollSent() }
 
         HIDOutputSerialQueue.queue.async { [weak self] in
             let result = Self.write(report: heartbeatReport, to: device)
+            if result == kIOReturnSuccess {
+                for report in powerReports {
+                    _ = Self.write(report: report, to: device)
+                }
+            }
             DispatchQueue.main.async { [weak self] in
                 guard let self, generation == self.onlineGeneration else { return }
                 self.heartbeatInFlight = false
@@ -806,6 +840,62 @@ final class IOKitHardwareListener {
         var usagePage: Int32 = -1
         CFNumberGetValue(unsafeBitCast(value, to: CFNumber.self), .sInt32Type, &usagePage)
         return Int(usagePage)
+    }
+
+    // MARK: - Liveness
+
+    /// The AU05 stays enumerated on USB after the knob is switched off, so
+    /// "device attached" is not the same as "device answers". Only the power
+    /// query round trip tells them apart — see `DialDeviceLiveness`.
+    /// Attaching the device and opening the panel both refresh power status
+    /// within the same tick; without this debounce those two batches would
+    /// count as "two silent polls" and flash "not responding" for a moment.
+    private func notePollSent() {
+        let now = Date().timeIntervalSince1970
+        guard now - lastPollSentAt > 0.5 else { return }
+        lastPollSentAt = now
+        let wasResponsive = liveness.isResponsive
+        liveness.pollSent()
+        publishResponsiveness(wasResponsive)
+    }
+
+    private func noteReplyReceived() {
+        let wasResponsive = liveness.isResponsive
+        liveness.replyReceived()
+        publishResponsiveness(wasResponsive)
+    }
+
+    private func resetLiveness() {
+        lastPollSentAt = 0
+        let wasResponsive = liveness.isResponsive
+        liveness.reset()
+        publishResponsiveness(wasResponsive)
+    }
+
+    private func publishResponsiveness(_ wasResponsive: Bool) {
+        guard wasResponsive != liveness.isResponsive else { return }
+        let responsive = liveness.isResponsive
+        DebugLog.log("listener: device \(responsive ? "answers again" : "stopped answering")")
+        if responsive {
+            rearmOnlineModeIfNeeded()
+        }
+        deliverOnMain { [responsivenessHandler] in responsivenessHandler(responsive) }
+    }
+
+    /// A knob that was switched off can come back with its firmware reset to
+    /// native mode, which would leave the host writing reports nobody reads
+    /// and the device emitting its own shortcuts. Re-sending the online
+    /// report restores the single-writer discipline without touching the
+    /// shortcuts stored in flash.
+    private func rearmOnlineModeIfNeeded() {
+        guard isRunning, connected, let device = inputDevice else { return }
+        if let error = enterOnlineModeSynchronously(on: device) {
+            DebugLog.log("listener: online re-arm FAILED: \(error.localizedDescription)")
+            deliverOnMain { [failureHandler] in failureHandler(error) }
+        } else {
+            heartbeatFailureReported = false
+            DebugLog.log("listener: online mode re-armed")
+        }
     }
 
     private func setConnected(_ newValue: Bool) {

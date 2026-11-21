@@ -262,6 +262,14 @@ case "status":
     let response = sendRequest(.init(command: "status"))
     if response.ok {
         print("state=\(response.state ?? "unknown")")
+        // Show who is behind the single LED state: winning session first.
+        if let sessions = response.sessions, !sessions.isEmpty {
+            print("sessions=\(sessions.count)")
+            for s in sessions {
+                let mark = s.winning ? "*" : " "
+                print(" \(mark) \(s.agent ?? s.id) \(s.state) \(s.ageSeconds)s")
+            }
+        }
     } else {
         fail(response.error ?? "未知错误")
     }
