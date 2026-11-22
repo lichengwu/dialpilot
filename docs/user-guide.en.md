@@ -22,7 +22,26 @@
 4. System Settings → Privacy & Security → enable **Input Monitoring** and **Accessibility**.
 5. On first launch, an existing VibeKey Lite configuration is migrated automatically.
 
-### Upgrading (keep the grants)
+### Upgrading
+
+**The brew cask (ad-hoc signed) — the grant is lost once, every time**
+
+```sh
+brew update
+brew upgrade --cask dialpilot      # tells you if there is nothing newer
+```
+
+`brew upgrade` on a cask is a reinstall: Homebrew uninstalls the old artifacts and installs the new ones (`reinstall: true` + `uninstall(successor:)` in its source), which is exactly "delete the app and install it again". The distributed build is ad-hoc signed, and an ad-hoc requirement is a single `cdhash H"…"`; a new binary means a new cdhash, so the old grant cannot match.
+
+After upgrading, once:
+
+1. System Settings → Privacy & Security → **Input Monitoring** → turn DialPilot **off, then back on**;
+2. the same for **Accessibility**;
+3. quit and relaunch DialPilot.
+
+Step 1 and 2 have to be a toggle: a switch that is already on cannot be re-confirmed by looking at it, and only off-then-on rewrites the stored requirement. See the last section of §10.
+
+**Your own build (same certificate) — the grants carry over**
 
 ```sh
 osascript -e 'tell application "DialPilot" to quit'
@@ -31,7 +50,7 @@ codesign --verify --strict "/Applications/DialPilot.app"
 open "/Applications/DialPilot.app"
 ```
 
-Signed with the same identity → the grants carry over. `dialpilotctl status` should return `state=idle` afterwards.
+Signed with the same identity → the grants carry over. `dialpilotctl status` should return `state=idle` afterwards. Do not mix an ad-hoc build with a certificate build — the identities are not interchangeable, and you lose the grant again.
 
 ## 2. Before first use (one-time, in Ulanzi Studio)
 
@@ -191,11 +210,34 @@ Manual items in live mode accept `s` to skip; they never auto-pass.
 | A manual state gets "stolen" | Real-hook arbitration (see §7); uninstall hooks for clean tests |
 | A light turns itself off after ~10 s | Expected `attention` behavior (completion bell) |
 | The voice-key LED flashes on its own | Firmware key feedback; the host cannot control it |
-| Grants keep disappearing | Ad-hoc signature; rebuild with one stable identity (see §1) |
+| Grants keep disappearing | Ad-hoc signature; every rebuild/upgrade is a new identity (see §1). Off-then-on fixes it |
+| **The switch is on but the app still has no permission** | TCC lists entries by bundle ID and decides by *signing requirement*. Any replaced app (upgrade, reinstall, identity change) ends up "enabled but ineffective". Turn the switch **off and back on**, then relaunch |
+| Gestures and lights die right after an upgrade | Expected for the ad-hoc distributed build: cdhash changes every version (see §1) |
 | Hooks installed but nothing happens | Codex needs `/hooks` approval; DSH needs a restart; others need a new session |
 | Device buttons stopped working | After an unexpected app exit the firmware reverts to native; relaunch the app |
 
 Logs: `~/Library/Application Support/DialPilot/debug.log`.
+
+### Why the switch is on and the permission still is not
+
+One TCC entry is a client (bundle ID) plus a **code signing requirement** (`csreq`). System Settings lists entries by the former, so a replaced app still appears — switch blue — while the actual allow decision compares the latter. For an ad-hoc signature that requirement is `cdhash H"…"`, precise down to the build hash, which is why "the app was replaced" and "the grant stopped working" are two faces of one thing.
+
+To see it yourself, in a terminal that has **Full Disk Access**:
+
+```sh
+# 1) what macOS has on file (the csreq column is hex)
+sqlite3 ~/Library/Application\ Support/com.apple.TCC/TCC.db \
+  "select service, auth_value, hex(csreq) from access
+     where client = 'dev.lichengwu.dialpilot';"
+
+# 2) turn that hex back into a readable requirement (paste the 66610a0c… value)
+printf '%s' '66610a0c…' | xxd -r -p > /tmp/tcc-req.bin && csreq -r /tmp/tcc-req.bin -t
+
+# 3) what the app currently on disk declares
+codesign -d -r- /Applications/DialPilot.app
+```
+
+If the `cdhash` in (2) and (3) differ, the entry is stale. Toggling the switch off and back on rewrites the csreq to the current app's, and the permission works again.
 
 ## 11. Red lines
 

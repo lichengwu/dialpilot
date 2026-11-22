@@ -81,7 +81,9 @@ DialPilot needs two macOS permissions for gestures and agent lights. **Without t
 
 - The app panel shows a **permission banner with one-click grant buttons** whenever either is missing; each button opens the exact Settings pane (and triggers the native prompt where macOS supports it).
 - After granting, reopen the panel — status is re-checked every time it opens. Input Monitoring grants sometimes need an app restart to take effect; quit and relaunch DialPilot if gestures still don't start.
-- **Signing matters for permissions**: macOS ties TCC grants to the code signature. Rebuilding with a different (or ad-hoc) identity invalidates the grants and you must re-allow. Use one valid development identity for every build (see Install below).
+- **Signing decides whether a grant survives.** macOS ties a TCC grant to the app's *code signing requirement*, not to its bundle ID. The distributed build is ad-hoc signed, and an ad-hoc requirement is nothing but `cdhash H"…"` — a hash of the exact binary. So **every release is a new identity**: after an upgrade the old grant no longer matches, while System Settings still lists the app (the list is built from bundle IDs) and shows the switch as enabled. That combination — switch looks on, permission still missing — is this, not a bug in the app.
+  **Fix:** System Settings → Privacy & Security → the permission → turn DialPilot **off and back on**, then relaunch. An already-on switch cannot be re-toggled, and off-then-on is what rewrites the stored requirement.
+  Only a notarized Developer ID build keeps one stable requirement across versions, so upgrades stop asking. See [Troubleshooting](docs/user-guide.en.md#10-troubleshooting) for the one-liner that shows what macOS currently has on file.
 - No other permissions are requested: no network access (the optional QwenWork listener binds 127.0.0.1 only), no camera/microphone, no files outside `~/Library/Application Support/DialPilot` and the agent config files you explicitly connect.
 
 ## Before first use (one-time, with Ulanzi Studio)
@@ -157,7 +159,23 @@ swift test --disable-sandbox        # 271 tests should pass (Core 247 + App 24)
 - `build-app.sh` (your local copy) picks your first **Apple Development** identity automatically, keeping those grants stable across rebuilds. Pin one with `DIALPILOT_SIGNING_IDENTITY="Apple Development: …"`.
 - `make-dmg.sh` (what other people download) re-signs the *staged copy* **ad-hoc** and never touches `.build/app`. Ad-hoc cannot expire, so old releases keep working; a Developer ID identity can be substituted once one exists: `DIALPILOT_RELEASE_IDENTITY="Developer ID Application: …"`.
 
-`./scripts/update-cask.sh` writes the new version and SHA-256 into the Homebrew cask after a release.
+### Releasing
+
+```sh
+./scripts/release.sh 1.1.3 --dry-run   # print the plan, change nothing
+./scripts/release.sh 1.1.3             # do it
+```
+
+Write the `## [1.1.3]` section in `CHANGELOG.md` first — the script refuses to
+run without it and reuses that section verbatim as the release notes, so the
+notes cannot drift from the changelog. It then bumps `CFBundleVersion`, runs the
+test suite, builds and ad-hoc signs the DMG, pushes `main` + tag, publishes the
+GitHub release with the `.dmg` and its `.sha256`, and finally writes the new
+version and checksum into `../homebrew-tap`. A release is only finished when
+`brew upgrade --cask dialpilot` on another machine picks it up.
+
+`./scripts/update-cask.sh` is that last step on its own, for when you need it
+separately.
 
 ## Usage
 

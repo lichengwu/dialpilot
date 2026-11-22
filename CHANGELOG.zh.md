@@ -6,6 +6,26 @@
 
 English: [CHANGELOG.md](CHANGELOG.md)
 
+## [Unreleased]
+
+### 新增
+
+- **`scripts/release.sh`**：一条命令走完发版——前置检查（工作区干净、在 `main`、
+  tag 未被占用、CHANGELOG 有对应段落、`gh` 已登录）、升版本号、跑测试、打 DMG、
+  提交打 tag 推送、创建 GitHub Release（发布说明直接从 CHANGELOG 该段落抽取）、
+  最后更新 cask。`--dry-run` 只打印计划，不动任何文件。
+
+### 变更
+
+- **权限文档讲清了升级到底发生了什么。** TCC 的一条授权 = bundle ID **加上**
+  代码签名要求；ad-hoc 签名的要求只有 `cdhash H"…"` 一条，所以每个版本都是新身份。
+  系统设置仍按 bundle ID 列出条目、开关仍显示为开——「开关是开的却没权限」因此
+  是同一个现象的两面，不是两个问题。解法（关掉再打开，然后重启 App）以及用
+  `sqlite3` + `csreq` 查 macOS 到底记了什么的配方，已写进用户指南、README 与
+  cask 的 caveats。
+- **用户指南点明 `brew upgrade` 本质是重装**（Homebrew 先卸旧 artifacts、再装新的），
+  所以升级必然换 cdhash。
+
 ## [1.1.2] — 2026-11-22
 
 安装通道版本：两条完全不碰 Gatekeeper 的安装路径、不会过期的发布映像，以及

@@ -22,7 +22,26 @@
 4. 系统设置 → 隐私与安全性 → 打开「输入监控」和「辅助使用」。
 5. 首次启动会自动迁移旧版 VibeKey Lite 的配置（若有）。
 
-### 替换升级（保留授权）
+### 替换升级
+
+**走 brew 安装的分发包（ad-hoc 签名）——授权必然失效一次**
+
+```sh
+brew update
+brew upgrade --cask dialpilot      # 没有新版会直接告诉你
+```
+
+`brew upgrade` 对 cask 的实现是「先卸旧、再装新」（Homebrew 源码里走的是 `reinstall: true` + `uninstall(successor:)`），跟手工删掉 App 再装一次等价。而分发版是 ad-hoc 签名，它的代码签名要求只有 `cdhash H"…"` 一条——**新版本二进制不同，cdhash 必然不同，旧授权必然不匹配**。
+
+所以升级后请做一次：
+
+1. 系统设置 → 隐私与安全性 → **输入监控** → 把 DialPilot **关掉再打开**；
+2. 同样的动作做一遍 **辅助使用**；
+3. 退出并重新打开 DialPilot。
+
+第 1、2 步的「关掉再打开」是必须的：开关本来就是开的时候，光看它亮着没用，只有 toggle 一次才会把新的签名要求写进 TCC。详见 §10 的「开关是开的但权限无效」。
+
+**自己构建的版本（同一张证书）——授权沿用**
 
 ```sh
 osascript -e 'tell application "DialPilot" to quit'
@@ -31,7 +50,7 @@ codesign --verify --strict "/Applications/DialPilot.app"
 open "/Applications/DialPilot.app"
 ```
 
-同一张证书签名 → 授权沿用，无需重新勾选。替换后 `dialpilotctl status` 应返回 `state=idle`。
+同一张证书签名 → 授权沿用，无需重新勾选。替换后 `dialpilotctl status` 应返回 `state=idle`。**注意不要把 ad-hoc 构建和证书构建混着装**，两者身份不通用，同样会失效一次。
 
 ## 2. 首次使用前（一次性，用 Ulanzi Studio 完成）
 
@@ -191,11 +210,34 @@ live 模式的人工项可输入 `s` 跳过，绝不自动通过。
 | 手动设的状态被「抢走」 | 真实 hooks 仲裁压制（见 §7），非 bug；纯净测试先卸 hooks |
 | 灯亮约 10 秒自己灭 | attention 状态的预期行为（完成铃） |
 | 语音键灯自己闪 | 固件按键反馈，正常，主机不可控 |
-| 授权反复失效 | 用了 ad-hoc 签名；用同一张开发证书重签（见 §1） |
+| 授权反复失效 | 用了 ad-hoc 签名；每次重编/升级都换身份（见 §1）。开关关掉再打开即可 |
+| **开关是开的，权限却拿不到** | TCC 的条目按 bundle ID 显示、按**签名要求**判定。App 被替换过（升级、删除重装、换签名）就会出现「亮着但不生效」。把开关**关掉再打开**，然后重启 App |
+| 升级到新版后手势/灯效全失效 | 预期行为，分发版 ad-hoc 签名的 cdhash 每版都变（见 §1「替换升级」） |
 | hooks 装了没反应 | codex 需 `/hooks` 批准；dsh 需重启；其余需新会话 |
 | 设备按键失灵 | App 意外退出后固件超时回原生；重启 App 即恢复在线模式 |
 
 日志：`~/Library/Application Support/DialPilot/debug.log`。
+
+### 开关是开的，为什么还是没权限
+
+TCC 里一条授权 = 客户端（bundle ID）+ **签名要求（csreq）**。系统设置只按前者列条目，所以换了签名的 App 在列表里照样出现、开关照样是蓝的；真正放行时比对的是后者。ad-hoc 签名的要求就是 `cdhash H"…"`——精确到构建哈希——所以「App 被换过」和「权限失效」是同一件事的两面。
+
+想自己确认，在**有「完全磁盘访问权限」的终端**里跑：
+
+```sh
+# 1) macOS 记的那条要求（csreq 列是 hex）
+sqlite3 ~/Library/Application\ Support/com.apple.TCC/TCC.db \
+  "select service, auth_value, hex(csreq) from access
+     where client = 'dev.lichengwu.dialpilot';"
+
+# 2) 把 hex 还原成可读的要求，例如把 66610a0c… 换进下面这行
+printf '%s' '66610a0c…' | xxd -r -p > /tmp/tcc-req.bin && csreq -r /tmp/tcc-req.bin -t
+
+# 3) 当前装着的那份 App 自己声明的要求
+codesign -d -r- /Applications/DialPilot.app
+```
+
+2 和 3 的 `cdhash` 不一致 = 陈旧条目。把开关关掉再打开，第 1 步那条记录的 csreq 会重写成当前 App 的，权限立即恢复。
 
 ## 11. 红线（任何操作都适用）
 

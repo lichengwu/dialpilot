@@ -81,7 +81,9 @@
 
 - 任一权限缺失时，面板会显示**权限横幅 + 一键授权按钮**；按钮直达对应设置面板（macOS 支持时同时触发系统弹窗）。
 - 授权后重新打开面板即可——每次打开都会重新检测。输入监控授权有时需要重启 App 才生效；若手势仍未启用，退出并重新打开 DialPilot。
-- **签名影响权限**：macOS 把 TCC 授权绑定到代码签名。换证书（或 ad-hoc）重编会使授权失效，需重新允许。每次构建用同一张有效开发证书（见下方安装）。
+- **签名决定授权能不能活下来。** macOS 把 TCC 授权绑定到 App 的**代码签名要求（designated requirement）**，不是 bundle ID。分发的版本是 ad-hoc 签名，而 ad-hoc 的要求就是 `cdhash H"…"`——精确到二进制哈希这一条。所以**每个版本都是新身份**：升级后旧授权不再匹配，但系统设置里条目还在（列表按 bundle ID 生成）、开关还是开的。这个「开关看着是开的、权限却拿不到」就是这个机制，不是 App 的 bug。
+  **解法**：系统设置 → 隐私与安全性 → 对应权限 → 把 DialPilot 先**关掉再打开**，然后重启 App。开关本来就是开的时候没法「再打开」，只有先关再开才会重写存下来的签名要求。
+  只有公证过的 Developer ID 构建能跨版本保持同一个签名要求，升级才不会反复问。macOS 到底记了什么，可以用 [用户指南 §10](docs/user-guide.md#10-排障) 里的一行命令查。
 - 不申请其他权限：不联网（可选的 QwenWork 监听仅绑 127.0.0.1）、不用摄像头/麦克风、不读写 `~/Library/Application Support/DialPilot` 与你明确接入的 Agent 配置之外的文件。
 
 ## 首次使用前（一次性，用 Ulanzi Studio 完成）
@@ -158,7 +160,20 @@ swift test --disable-sandbox        # 271 个测试应全绿（Core 247 + App 24
 - `build-app.sh`（给你自己装的那份）自动挑本机第一张 **Apple Development** 证书，让授权跨重编稳定。要指定：`DIALPILOT_SIGNING_IDENTITY="Apple Development: …"`。
 - `make-dmg.sh`（给别人下载的那份）只对**暂存副本**重签成 **ad-hoc**，不碰 `.build/app`。ad-hoc 不会过期，旧版本永远能开；将来有 Developer ID 时用 `DIALPILOT_RELEASE_IDENTITY="Developer ID Application: …"` 替换。
 
-发布后跑 `./scripts/update-cask.sh` 把新版本号与 SHA-256 写进 Homebrew cask。
+### 发版
+
+```sh
+./scripts/release.sh 1.1.3 --dry-run   # 只打印计划，不动任何文件
+./scripts/release.sh 1.1.3             # 真发
+```
+
+先在 `CHANGELOG.md` 写好 `## [1.1.3]` 段落——脚本没有它就拒绝执行，并把这个段落
+原样当作发布说明，所以发布说明不会和变更日志脱节。之后它自增 `CFBundleVersion`、
+跑测试、构建并 ad-hoc 签名 DMG、推送 `main` 与 tag、用 `.dmg` 和 `.sha256` 建
+GitHub Release，最后把新版本号与校验和写进 `../homebrew-tap`。**另一台机器上
+`brew upgrade --cask dialpilot` 能拿到新版，才算发完。**
+
+`./scripts/update-cask.sh` 就是最后那一步的单独版本，需要时单独跑。
 
 ## 使用
 

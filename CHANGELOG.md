@@ -6,6 +6,30 @@ All notable changes to DialPilot are documented here. The format follows
 
 中文版：[CHANGELOG.zh.md](CHANGELOG.zh.md)
 
+## [Unreleased]
+
+### Added
+
+- **`scripts/release.sh`**: one command per release — preconditions (clean
+  tree, `main`, unused tag, changelog section present, `gh` authenticated),
+  version bump, tests, DMG, commit/tag/push, GitHub release whose notes are
+  lifted from the changelog section, then the cask update. `--dry-run` prints
+  the plan without touching anything.
+
+### Changed
+
+- **Permission docs explain what actually happens on upgrade.** A TCC entry is
+  a bundle ID *plus* a code signing requirement; an ad-hoc requirement is just
+  `cdhash H"…"`, so every release is a new identity. Settings still lists the
+  app by bundle ID and shows the switch as on — which is why "the switch is on
+  but there is no permission" is one symptom, not two. The fix (turn the switch
+  off and back on, then relaunch) and a `sqlite3` + `csreq` recipe to inspect
+  what macOS has on file are now in the user guide, README and the cask's
+  caveats.
+- **The user guide explains that `brew upgrade` is a reinstall** (Homebrew
+  uninstalls the old artifacts, then installs the new ones), so upgrades always
+  land on a new cdhash.
+
 ## [1.1.2] — 2026-11-22
 
 Install-channel release: two ways to install without ever meeting Gatekeeper,
