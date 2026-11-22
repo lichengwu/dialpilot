@@ -6,7 +6,12 @@ All notable changes to DialPilot are documented here. The format follows
 
 中文版：[CHANGELOG.zh.md](CHANGELOG.zh.md)
 
-## [Unreleased]
+## [1.1.3] — 2026-11-22
+
+Documentation and release-tooling release; no behavioural change in the app. It
+does ship a **new ad-hoc signing identity**, so upgrading drops the Input
+Monitoring and Accessibility grants once — this is the release that explains
+why, and the fix is to turn both switches off and back on, then relaunch.
 
 ### Added
 
