@@ -6,6 +6,28 @@
 
 English: [CHANGELOG.md](CHANGELOG.md)
 
+## [1.1.1] — 2026-11-22
+
+分发版本：DialPilot 现在以磁盘映像形式提供下载，用起来不再需要编译工具链。
+
+### 新增
+
+- **DMG 安装包**（`scripts/make-dmg.sh`）——构建 `DialPilot.app`，连同
+  `/Applications` 快捷方式一起打成已签名的 zlib 压缩映像，产物在
+  `dist/DialPilot-<version>.dmg`。每个 release 都会附上这个文件。
+
+### 变更
+
+- 安装文档改成下载优先；从源码编译降为「想读代码或改代码」的路径。
+- 文档里写明唯一的 Gatekeeper 步骤：App 用 Apple Development 证书签名、
+  **未做公证**，首次启动需要右键 → 打开（或「系统设置 → 隐私与安全性 →
+  仍要打开」）。
+
+### 移除
+
+- 分享文案草稿（`docs/share.md`、`docs/share.zh.md`）——版本说明改由本文件
+  与 GitHub Releases 页面承载。
+
 ## [1.1.0] — 2026-11-21
 
 「消失在菜单栏里」版本：面板自己管窗口，设备状态不再说谎，界面中英双语。

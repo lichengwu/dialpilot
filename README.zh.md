@@ -107,6 +107,17 @@ DialPilot 不需要你在 Studio 里做账号绑定或按键映射——首次�
 
 ## 安装
 
+**下载**最新 [release](https://github.com/lichengwu/dialpilot/releases/latest)，打开 `DialPilot-<version>.dmg`，把 **DialPilot** 拖到「Applications」快捷方式上，再从 `/Applications` 启动。
+
+磁盘映像用 Apple Development 证书签名、**未做公证**，所以 macOS 会拦第一次启动：右键 App → **打开**（一次即可），或到「系统设置 → 隐私与安全性 → 仍要打开」放行。需求：Apple Silicon Mac、macOS 13+。
+
+然后：
+1. 完全退出 Ulanzi Studio（两个宿主会抢设备）。
+2. 系统设置 → 隐私与安全性 → 允许「输入监控」和「辅助使用」。
+3. 首次启动会自动迁移旧版 VibeKey Lite 的配置（若有）。
+
+### 从源码构建
+
 需求：Apple Silicon Mac、macOS 13+、Xcode Command Line Tools。
 
 ```sh
@@ -114,19 +125,14 @@ git clone https://github.com/lichengwu/dialpilot.git
 cd dialpilot
 swift test --disable-sandbox        # 271 个测试应全绿（Core 247 + App 24）
 ./build-app.sh                      # 产物 .build/app/DialPilot.app
+./scripts/make-dmg.sh               # 产物 dist/DialPilot-<version>.dmg
 ```
 
-**签名很重要**：macOS 把输入监控/辅助使用授权绑定到代码签名，ad-hoc 签名每次重编都换身份，会悄悄让你刚给的授权失效。`build-app.sh` 现在会自动挑本机第一张 **Apple Development** 证书，只有在没有任何证书时才回退 ad-hoc。要指定某张证书：
+**签名很重要**：macOS 把输入监控/辅助使用授权绑定到代码签名，ad-hoc 签名每次重编都换身份，会悄悄让你刚给的授权失效。`build-app.sh` 与 `make-dmg.sh` 会自动挑本机第一张 **Apple Development** 证书，只有在没有任何证书时才回退 ad-hoc。要指定某张证书：
 
 ```sh
 DIALPILOT_SIGNING_IDENTITY="Apple Development: Your Name (TEAMID)" ./build-app.sh
 ```
-
-然后：
-1. 完全退出 Ulanzi Studio（两个宿主会抢设备）。
-2. 把 `DialPilot.app` 复制到 `/Applications/` 并启动。
-3. 系统设置 → 隐私与安全性 → 允许「输入监控」和「辅助使用」。
-4. 首次启动会自动迁移旧版 VibeKey Lite 的配置（若有）。
 
 ## 使用
 
@@ -186,8 +192,6 @@ Agent hooks → dialpilotctl → Unix socket → DialPilot App（唯一 HID 写�
 | [协议笔记](docs/protocol.md) | 中文 | HID 报文布局、已验证命令组、置信度标注 |
 | [灯效设计](docs/led-design.md) | 中文 | 状态 → 灯效规则（R1–R7）与仲裁 |
 | [更新日志](CHANGELOG.zh.md) | 中文 | 版本变更（Keep a Changelog） |
-| [分享文案](docs/share.zh.md) | 中文 | 即刻 / 少数派 / V2EX / 小红书 可直接粘贴 |
-| [Share kit](docs/share.md) | English | X / HN / Reddit 可粘贴文案 |
 
 ## 来源与致谢
 

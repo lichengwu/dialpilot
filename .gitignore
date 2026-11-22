@@ -14,3 +14,6 @@ DerivedData/
 # Local audit spreadsheets and their work dirs
 *.xlsx
 .*.ref/
+
+# Release DMGs
+dist/

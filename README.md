@@ -107,6 +107,17 @@ Recommendation: remove Studio from login items so it never auto-starts alongside
 
 ## Install
 
+**Download** the latest [release](https://github.com/lichengwu/dialpilot/releases/latest), open `DialPilot-<version>.dmg`, drag **DialPilot** onto the Applications shortcut, then launch it from `/Applications`.
+
+The disk image is signed with an Apple Development certificate but **not notarized**, so macOS blocks the first launch: right-click the app → **Open** (once is enough), or allow it under System Settings → Privacy & Security → *Open Anyway*. Requires an Apple Silicon Mac on macOS 13+.
+
+Then:
+1. Quit Ulanzi Studio completely (two hosts fight over the device).
+2. System Settings → Privacy & Security → allow **Input Monitoring** and **Accessibility**.
+3. On first launch, an existing VibeKey Lite configuration is migrated automatically (if present).
+
+### Build from source
+
 Requirements: Apple Silicon Mac, macOS 13+, Xcode Command Line Tools.
 
 ```sh
@@ -114,19 +125,14 @@ git clone https://github.com/lichengwu/dialpilot.git
 cd dialpilot
 swift test --disable-sandbox        # 271 tests should pass (Core 247 + App 24)
 ./build-app.sh                      # artifact: .build/app/DialPilot.app
+./scripts/make-dmg.sh               # artifact: dist/DialPilot-<version>.dmg
 ```
 
-**Signing matters**: macOS ties Input Monitoring / Accessibility grants to the code signature, and an ad-hoc signature changes identity on every rebuild — which silently invalidates the permissions you just granted. `build-app.sh` now picks your first **Apple Development** identity automatically and only falls back to ad-hoc when none exists. To pin a specific identity:
+**Signing matters**: macOS ties Input Monitoring / Accessibility grants to the code signature, and an ad-hoc signature changes identity on every rebuild — which silently invalidates the permissions you just granted. `build-app.sh` and `make-dmg.sh` pick your first **Apple Development** identity automatically and only fall back to ad-hoc when none exists. To pin a specific identity:
 
 ```sh
 DIALPILOT_SIGNING_IDENTITY="Apple Development: Your Name (TEAMID)" ./build-app.sh
 ```
-
-Then:
-1. Quit Ulanzi Studio completely (two hosts fight over the device).
-2. Copy `DialPilot.app` to `/Applications/` and launch it.
-3. System Settings → Privacy & Security → allow **Input Monitoring** and **Accessibility**.
-4. On first launch, an existing VibeKey Lite configuration is migrated automatically (if present).
 
 ## Usage
 
@@ -186,8 +192,6 @@ Hard-won pitfalls are documented in the corresponding source headers (`DialLedCo
 | [Protocol notes](docs/protocol.md) | 中文 | HID report layout, verified command groups, confidence labels |
 | [Light design](docs/led-design.md) | 中文 | State → pattern rules (R1–R7) and arbitration |
 | [Changelog](CHANGELOG.md) | English | Release notes (Keep a Changelog) |
-| [Share kit](docs/share.md) | English | Ready-to-post blurbs for X / HN / Reddit |
-| [分享文案](docs/share.zh.md) | 中文 | 即刻 / 少数派 / V2EX / 小红书 可直接粘贴的文案 |
 
 ## Origins & acknowledgments
 

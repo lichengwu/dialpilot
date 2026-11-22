@@ -6,6 +6,30 @@ All notable changes to DialPilot are documented here. The format follows
 
 中文版：[CHANGELOG.zh.md](CHANGELOG.zh.md)
 
+## [1.1.1] — 2026-11-22
+
+Distribution release: DialPilot now ships as a downloadable disk image, so
+using it no longer requires a toolchain.
+
+### Added
+
+- **DMG installer** (`scripts/make-dmg.sh`) — builds `DialPilot.app` and packs
+  it with an `/Applications` shortcut into a signed, zlib-compressed image at
+  `dist/DialPilot-<version>.dmg`. Every release attaches this file.
+
+### Changed
+
+- Install docs now lead with the download path; building from source is the
+  fallback for people who want to read or patch the code.
+- The notes explain the one Gatekeeper step: the app is signed with an Apple
+  Development certificate and is **not notarized**, so the first launch needs
+  right-click → Open (or System Settings → Privacy & Security → Open Anyway).
+
+### Removed
+
+- Share-kit drafts (`docs/share.md`, `docs/share.zh.md`) — release notes live
+  here and on the GitHub Releases page instead.
+
 ## [1.1.0] — 2026-11-21
 
 The "make it disappear into the menu bar" release: the panel owns its own
