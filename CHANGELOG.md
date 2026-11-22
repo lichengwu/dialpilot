@@ -6,6 +6,43 @@ All notable changes to DialPilot are documented here. The format follows
 
 中文版：[CHANGELOG.zh.md](CHANGELOG.zh.md)
 
+## [1.1.2] — 2026-11-22
+
+Install-channel release: two ways to install without ever meeting Gatekeeper,
+release images that cannot expire, and corrected instructions for the path that
+still shows the dialog.
+
+### Added
+
+- **Homebrew cask** (`lichengwu/homebrew-tap` — see README): pins the image's
+  SHA-256 and clears the quarantine flag after installing, so
+  `brew install --cask lichengwu/tap/dialpilot` opens on first double-click.
+- **`scripts/install.sh`**: resolves the latest release, verifies it against the
+  published checksum, installs to `/Applications`, clears quarantine. For people
+  who do not use Homebrew.
+- **`.sha256` asset** published alongside every DMG; both install channels and
+  the cask verify against it.
+- **`scripts/update-cask.sh`**: writes the new version and checksum into the tap
+  after a release, refusing to edit if the cask drifted.
+
+### Fixed
+
+- **The Gatekeeper instructions were wrong for macOS 15+.** 1.1.1 told people to
+  Control-click → Open; Apple removed that bypass in Sequoia (macOS 26 behaves
+  the same). The documented path is now: trigger the blocked launch, then
+  System Settings → Privacy & Security → *Open Anyway*, within the ~1-hour
+  window that button stays visible.
+
+### Changed
+
+- **Release images are signed ad-hoc** instead of with an Apple Development
+  certificate. Neither passes Gatekeeper for a browser download, but an Apple
+  Development signature without a timestamp stops verifying when the
+  certificate expires — which would turn every old release into "app is
+  damaged". Ad-hoc has no certificate chain, so it never expires.
+  `build-app.sh` still uses Apple Development for your local copy, where a
+  stable signature keeps the permission grants alive.
+
 ## [1.1.1] — 2026-11-22
 
 Distribution release: DialPilot now ships as a downloadable disk image, so

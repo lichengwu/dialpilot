@@ -4,13 +4,24 @@
 #   ./scripts/make-dmg.sh                 # build + package -> dist/DialPilot-<version>.dmg
 #   ./scripts/make-dmg.sh --skip-build    # package the existing .build/app/DialPilot.app
 #
-# The DMG contains DialPilot.app plus an /Applications symlink, so the user
-# drags one icon onto the other. The disk image is signed with the same
-# identity build-app.sh used (Apple Development when available).
+# Release artifacts are signed **ad-hoc** by default, on purpose:
+#   * Gatekeeper rejects a non-notarized download either way, so an Apple
+#     Development signature buys the downloader nothing;
+#   * an Apple Development signature without a timestamp stops verifying once
+#     the certificate expires (~1 year), which turns every old release into
+#     "app is damaged" for new downloaders. Ad-hoc has no certificate chain,
+#     so it never expires.
+# A stable local identity still matters for *your own* installed build (macOS
+# ties Input Monitoring / Accessibility grants to the signature) — that is
+# build-app.sh's job, and this script does not touch .build/app.
+#
+# Override the release identity when a Developer ID + notarization is available:
+#   DIALPILOT_RELEASE_IDENTITY="Developer ID Application: ..." ./scripts/make-dmg.sh
 set -eu
 
 PROJECT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 APP_NAME="DialPilot"
+BUNDLE_ID="dev.lichengwu.dialpilot"
 APP_DIR="$PROJECT_DIR/.build/app/$APP_NAME.app"
 DIST_DIR="$PROJECT_DIR/dist"
 INFO_PLIST="$PROJECT_DIR/AppResources/Info.plist"
@@ -20,7 +31,7 @@ for arg in "$@"; do
     case "$arg" in
         --skip-build) SKIP_BUILD=1 ;;
         -h|--help)
-            sed -n '2,9p' "$0" | sed 's/^# \{0,1\}//'
+            sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//'
             exit 0
             ;;
         *)
@@ -32,6 +43,8 @@ done
 
 VERSION=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$INFO_PLIST")
 DMG_PATH="$DIST_DIR/$APP_NAME-$VERSION.dmg"
+SHA_PATH="$DMG_PATH.sha256"
+RELEASE_IDENTITY=${DIALPILOT_RELEASE_IDENTITY:--}
 
 if [ "$SKIP_BUILD" -eq 0 ]; then
     "$PROJECT_DIR/build-app.sh" >/dev/null
@@ -41,32 +54,28 @@ if [ ! -d "$APP_DIR" ]; then
     exit 1
 fi
 
-# Same identity resolution as build-app.sh: a stable signature keeps the
-# user's Input Monitoring / Accessibility grants across upgrades.
-SIGNING_IDENTITY=${DIALPILOT_SIGNING_IDENTITY:-}
-if [ -z "$SIGNING_IDENTITY" ]; then
-    SIGNING_IDENTITY=$(
-        security find-identity -v -p codesigning 2>/dev/null \
-            | sed -n 's/^[[:space:]]*[0-9]*) [0-9A-F]* "\(Apple Development:.*\)"$/\1/p' \
-            | head -n 1
-    )
-    [ -n "$SIGNING_IDENTITY" ] || SIGNING_IDENTITY=-
-fi
-
 STAGE_ROOT=$(mktemp -d "$PROJECT_DIR/.build/dialpilot-dmg.XXXXXX")
 cleanup() {
     rm -rf -- "$STAGE_ROOT"
 }
 trap cleanup EXIT HUP INT TERM
 
+STAGED_APP="$STAGE_ROOT/$APP_NAME/$APP_NAME.app"
 mkdir -p "$STAGE_ROOT/$APP_NAME"
-ditto "$APP_DIR" "$STAGE_ROOT/$APP_NAME/$APP_NAME.app"
+ditto "$APP_DIR" "$STAGED_APP"
 ln -s /Applications "$STAGE_ROOT/$APP_NAME/Applications"
 
-codesign --verify --strict "$STAGE_ROOT/$APP_NAME/$APP_NAME.app"
+# Re-sign the staged copy only: helpers first, then the bundle seal.
+for helper in "$STAGED_APP/Contents/MacOS/"*; do
+    if file "$helper" | grep -q "Mach-O"; then
+        codesign --force --sign "$RELEASE_IDENTITY" "$helper"
+    fi
+done
+codesign --force --sign "$RELEASE_IDENTITY" --identifier "$BUNDLE_ID" "$STAGED_APP"
+codesign --verify --strict "$STAGED_APP"
 
 mkdir -p "$DIST_DIR"
-rm -f "$DMG_PATH"
+rm -f "$DMG_PATH" "$SHA_PATH"
 
 # UDZO = zlib-compressed, read-only: the format every browser downloads without
 # extra tooling. HFS+ keeps the /Applications symlink semantics identical to
@@ -80,10 +89,15 @@ hdiutil create \
     -quiet \
     "$DMG_PATH"
 
-codesign --force --sign "$SIGNING_IDENTITY" "$DMG_PATH"
+codesign --force --sign "$RELEASE_IDENTITY" "$DMG_PATH"
 codesign --verify --strict "$DMG_PATH"
 hdiutil verify "$DMG_PATH" >/dev/null
 
+# install.sh and the Homebrew cask both pin this file's value; emit it next to
+# the image so the release step can upload it as a second asset.
+(cd "$DIST_DIR" && shasum -a 256 "$(basename "$DMG_PATH")" > "$(basename "$SHA_PATH")")
+
 echo "$DMG_PATH"
-echo "sha256: $(shasum -a 256 "$DMG_PATH" | cut -d' ' -f1)"
-echo "size:   $(du -h "$DMG_PATH" | cut -f1)"
+echo "identity: $RELEASE_IDENTITY"
+echo "sha256:   $(cut -d' ' -f1 "$SHA_PATH")"
+echo "size:     $(du -h "$DMG_PATH" | cut -f1)"

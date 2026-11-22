@@ -6,6 +6,36 @@
 
 English: [CHANGELOG.md](CHANGELOG.md)
 
+## [1.1.2] — 2026-11-22
+
+安装通道版本：两条完全不碰 Gatekeeper 的安装路径、不会过期的发布映像，以及
+对「仍然会弹窗」那条路径的正确说明。
+
+### 新增
+
+- **Homebrew cask**（`lichengwu/homebrew-tap`，见 README）：锁死映像 SHA-256，
+  装完清除隔离标记，`brew install --cask lichengwu/tap/dialpilot` 装好即可双击运行。
+- **`scripts/install.sh`**：解析最新版本、用发布页校验和验证、装到
+  `/Applications`、清隔离标记。面向不用 Homebrew 的人。
+- **`.sha256` 资产**：每个 DMG 旁边一起发布；两条安装通道与 cask 都据此校验。
+- **`scripts/update-cask.sh`**：发布后把新版本号与校验和写进 tap；cask 结构漂移
+  时直接拒绝改动。
+
+### 修复
+
+- **macOS 15+ 的 Gatekeeper 说明是错的。** 1.1.1 写的是「右键 → 打开」，而 Apple
+  在 Sequoia 已移除该绕过方式（macOS 26 同样）。现在写的正确路径是：先触发一次
+  被拦的启动，再到「系统设置 → 隐私与安全性 → 仍要打开」，且该按钮只在约一小时
+  内可见。
+
+### 变更
+
+- **发布映像改用 ad-hoc 签名**，不再用 Apple Development 证书。对浏览器下载来说
+  两者都过不了 Gatekeeper，但没打时间戳的 Apple Development 签名在证书过期后会
+  验证失败——那会让所有旧版本变成「App 已损坏」。ad-hoc 没有证书链，永不过期。
+  `build-app.sh` 仍用 Apple Development 给你本地那份签名，因为稳定的签名才能保住
+  已授予的权限。
+
 ## [1.1.1] — 2026-11-22
 
 分发版本：DialPilot 现在以磁盘映像形式提供下载，用起来不再需要编译工具链。

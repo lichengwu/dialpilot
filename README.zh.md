@@ -107,14 +107,39 @@ DialPilot 不需要你在 Studio 里做账号绑定或按键映射——首次�
 
 ## 安装
 
-**下载**最新 [release](https://github.com/lichengwu/dialpilot/releases/latest)，打开 `DialPilot-<version>.dmg`，把 **DialPilot** 拖到「Applications」快捷方式上，再从 `/Applications` 启动。
+**Homebrew：一条命令，没有 Gatekeeper 弹窗**
 
-磁盘映像用 Apple Development 证书签名、**未做公证**，所以 macOS 会拦第一次启动：右键 App → **打开**（一次即可），或到「系统设置 → 隐私与安全性 → 仍要打开」放行。需求：Apple Silicon Mac、macOS 13+。
+```sh
+brew install --cask lichengwu/tap/dialpilot
+```
+
+cask 锁死了发布映像的 SHA-256，装完顺手清掉隔离标记，所以第一次双击就能开，`brew upgrade` 可持续升级。
+
+**脚本安装：不用 Homebrew 的人**
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/lichengwu/dialpilot/main/scripts/install.sh | sh
+```
+
+自动解析最新版本、用发布页的 SHA-256 校验映像、装到 `/Applications`、清除隔离标记。
+
+**磁盘映像：手动路径**
+从 [Releases](https://github.com/lichengwu/dialpilot/releases/latest) 下载 `DialPilot-<version>.dmg`，打开后把 **DialPilot** 拖到 Applications 快捷方式上。浏览器下载的文件带隔离标记，Gatekeeper 会拦第一次启动。**右键 → 打开这个办法已经失效**——Apple 在 macOS 15 Sequoia 移除了该绕过方式，macOS 26 同样如此。正确做法：
+
+1. 先双击 App 一次，看到警告后点「完成」。
+2. 系统设置 → 隐私与安全性 → 滚到「安全性」区块 → **仍要打开**。
+3. 认证后警告会再弹一次，这次带「打开」按钮。
+
+「仍要打开」只在被拦那次启动后约一小时内出现——找不到就再双击一次 App，然后立刻回系统设置。终端等价命令：`xattr -dr com.apple.quarantine /Applications/DialPilot.app`。
+
+**签名说明（不粉饰）**：发布映像用 **ad-hoc 签名**，没有 Apple 证书、**未公证**。这是刻意的：Apple Development 签名对下载者毫无帮助（照样被 Gatekeeper 拦），还会在证书过期后连带旧版本一起失效。要做到双击直开，必须有 Developer ID 证书 + 公证，那需要付费加入 Apple Developer Program（¥688/年），本项目没有。Homebrew 与脚本两条通道之所以不弹窗，是因为文件由它们自己下载，不带浏览器的隔离标记。
 
 然后：
 1. 完全退出 Ulanzi Studio（两个宿主会抢设备）。
 2. 系统设置 → 隐私与安全性 → 允许「输入监控」和「辅助使用」。
 3. 首次启动会自动迁移旧版 VibeKey Lite 的配置（若有）。
+
+需求：Apple Silicon Mac、macOS 13+。
 
 ### 从源码构建
 
@@ -125,14 +150,15 @@ git clone https://github.com/lichengwu/dialpilot.git
 cd dialpilot
 swift test --disable-sandbox        # 271 个测试应全绿（Core 247 + App 24）
 ./build-app.sh                      # 产物 .build/app/DialPilot.app
-./scripts/make-dmg.sh               # 产物 dist/DialPilot-<version>.dmg
+./scripts/make-dmg.sh               # 产物 dist/DialPilot-<version>.dmg + .sha256
 ```
 
-**签名很重要**：macOS 把输入监控/辅助使用授权绑定到代码签名，ad-hoc 签名每次重编都换身份，会悄悄让你刚给的授权失效。`build-app.sh` 与 `make-dmg.sh` 会自动挑本机第一张 **Apple Development** 证书，只有在没有任何证书时才回退 ad-hoc。要指定某张证书：
+**签名很重要，而且两种构建刻意不同**：macOS 把输入监控/辅助使用授权绑定到代码签名，ad-hoc 签名每次重编都换身份，会悄悄让你刚给的授权失效。所以：
 
-```sh
-DIALPILOT_SIGNING_IDENTITY="Apple Development: Your Name (TEAMID)" ./build-app.sh
-```
+- `build-app.sh`（给你自己装的那份）自动挑本机第一张 **Apple Development** 证书，让授权跨重编稳定。要指定：`DIALPILOT_SIGNING_IDENTITY="Apple Development: …"`。
+- `make-dmg.sh`（给别人下载的那份）只对**暂存副本**重签成 **ad-hoc**，不碰 `.build/app`。ad-hoc 不会过期，旧版本永远能开；将来有 Developer ID 时用 `DIALPILOT_RELEASE_IDENTITY="Developer ID Application: …"` 替换。
+
+发布后跑 `./scripts/update-cask.sh` 把新版本号与 SHA-256 写进 Homebrew cask。
 
 ## 使用
 

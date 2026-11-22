@@ -107,14 +107,38 @@ Recommendation: remove Studio from login items so it never auto-starts alongside
 
 ## Install
 
-**Download** the latest [release](https://github.com/lichengwu/dialpilot/releases/latest), open `DialPilot-<version>.dmg`, drag **DialPilot** onto the Applications shortcut, then launch it from `/Applications`.
+**Homebrew — one command, no Gatekeeper dialog:**
 
-The disk image is signed with an Apple Development certificate but **not notarized**, so macOS blocks the first launch: right-click the app → **Open** (once is enough), or allow it under System Settings → Privacy & Security → *Open Anyway*. Requires an Apple Silicon Mac on macOS 13+.
+```sh
+brew install --cask lichengwu/tap/dialpilot
+```
+
+The cask pins the SHA-256 of the release image and clears the quarantine flag after installing, so the app opens on the first double-click and `brew upgrade` keeps it current.
+
+**Script — if you don't use Homebrew:**
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/lichengwu/dialpilot/main/scripts/install.sh | sh
+```
+
+It resolves the latest release, verifies the image against the published SHA-256, installs to `/Applications`, and clears quarantine.
+
+**Disk image — the manual path:** download `DialPilot-<version>.dmg` from [Releases](https://github.com/lichengwu/dialpilot/releases/latest), open it, drag **DialPilot** onto the Applications shortcut. A browser download is quarantined, so Gatekeeper blocks the first launch. **Control-click → Open no longer works** — Apple removed that bypass in macOS 15 Sequoia, and macOS 26 behaves the same. Instead:
+
+1. Double-click the app once, then dismiss the warning.
+2. System Settings → Privacy & Security → scroll to the Security section → **Open Anyway**.
+3. Authenticate; the warning returns with an Open button.
+
+*Open Anyway* only stays for about an hour after the blocked launch — if it is gone, double-click the app again and go straight back. The terminal equivalent is `xattr -dr com.apple.quarantine /Applications/DialPilot.app`.
+
+**Signing, stated plainly:** release images are **ad-hoc signed** — no Apple certificate, **not notarized**. That is deliberate. An Apple Development signature would not help a downloader (Gatekeeper rejects both) and would stop verifying when the certificate expires. Removing the dialog entirely needs a Developer ID certificate plus notarization, which requires a paid Apple Developer Program membership (¥688/year); this is a hobby project without one. The Homebrew and script channels sidestep the dialog because they fetch the file themselves instead of leaving a browser quarantine flag on it.
 
 Then:
 1. Quit Ulanzi Studio completely (two hosts fight over the device).
 2. System Settings → Privacy & Security → allow **Input Monitoring** and **Accessibility**.
 3. On first launch, an existing VibeKey Lite configuration is migrated automatically (if present).
+
+Requires an Apple Silicon Mac on macOS 13+.
 
 ### Build from source
 
@@ -125,14 +149,15 @@ git clone https://github.com/lichengwu/dialpilot.git
 cd dialpilot
 swift test --disable-sandbox        # 271 tests should pass (Core 247 + App 24)
 ./build-app.sh                      # artifact: .build/app/DialPilot.app
-./scripts/make-dmg.sh               # artifact: dist/DialPilot-<version>.dmg
+./scripts/make-dmg.sh               # artifact: dist/DialPilot-<version>.dmg + .sha256
 ```
 
-**Signing matters**: macOS ties Input Monitoring / Accessibility grants to the code signature, and an ad-hoc signature changes identity on every rebuild — which silently invalidates the permissions you just granted. `build-app.sh` and `make-dmg.sh` pick your first **Apple Development** identity automatically and only fall back to ad-hoc when none exists. To pin a specific identity:
+**Signing matters, and the two builds differ on purpose.** macOS ties Input Monitoring / Accessibility grants to the code signature, and an ad-hoc signature changes identity on every rebuild — which silently invalidates the permissions you just granted. So:
 
-```sh
-DIALPILOT_SIGNING_IDENTITY="Apple Development: Your Name (TEAMID)" ./build-app.sh
-```
+- `build-app.sh` (your local copy) picks your first **Apple Development** identity automatically, keeping those grants stable across rebuilds. Pin one with `DIALPILOT_SIGNING_IDENTITY="Apple Development: …"`.
+- `make-dmg.sh` (what other people download) re-signs the *staged copy* **ad-hoc** and never touches `.build/app`. Ad-hoc cannot expire, so old releases keep working; a Developer ID identity can be substituted once one exists: `DIALPILOT_RELEASE_IDENTITY="Developer ID Application: …"`.
+
+`./scripts/update-cask.sh` writes the new version and SHA-256 into the Homebrew cask after a release.
 
 ## Usage
 
