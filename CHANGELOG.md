@@ -6,6 +6,37 @@ All notable changes to DialPilot are documented here. The format follows
 
 中文版：[CHANGELOG.zh.md](CHANGELOG.zh.md)
 
+## [1.1.5] — 2026-11-23
+
+The last re-grant. Releases are now signed with a **fixed self-signed project
+certificate** instead of ad-hoc, so the TCC requirement is
+`identifier + certificate leaf` — stable across versions. **Upgrading from
+≤1.1.4 needs one final off-then-on of both permission switches; every update
+after this keeps the grants.**
+
+### Added
+
+- **CI releases (mode 2)**: `.github/workflows/release.yml` — pushing a `v*`
+  tag imports the signing certificate from repo secrets, runs the tests,
+  builds the DMG, verifies its designated requirement against the committed
+  public certificate (`certs/dialpilot-release.crt`), publishes the release
+  and updates the Homebrew tap. Contributors never hold the private key.
+  `.github/workflows/ci.yml` runs the test suite on every push/PR.
+- `scripts/create-signing-cert.sh`: one-time maintainer setup — 20-year
+  code-signing certificate in a dedicated keychain, public half committed,
+  encrypted `.p12` backup for the password manager / CI secret.
+- `certs/dialpilot-release.crt`: the public certificate, so anyone can verify
+  a download's `certificate leaf` anchor matches the project key.
+
+### Changed
+
+- `make-dmg.sh` signs with the "DialPilot Release" identity and **refuses to
+  package a cdhash-anchored build** (ad-hoc fallback is local-testing only).
+- `release.sh` defaults to the CI path (bump → commit → tag → push → watch);
+  `--local` keeps the legacy all-on-this-machine flow.
+- README ×2, user guide ×2, cask caveats: "re-grant every update" becomes
+  "one last re-grant when crossing 1.1.4 → 1.1.5".
+
 ## [1.1.4] — 2026-11-23
 
 The "plugged in but not connected" release. While Ulanzi Studio runs it owns

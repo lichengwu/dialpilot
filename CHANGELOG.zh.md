@@ -6,6 +6,33 @@
 
 English: [CHANGELOG.md](CHANGELOG.md)
 
+## [1.1.5] — 2026-11-23
+
+最后一次重授。发布版改用**固定自签项目证书**替代 ad-hoc，TCC 签名要求变为
+`identifier + certificate leaf`——跨版本稳定。**从 ≤1.1.4 升上来需要最后
+一次把两个权限开关关掉再打开；此后所有更新授权都保留。**
+
+### 新增
+
+- **CI 发版（模式 2）**：`.github/workflows/release.yml`——推 `v*` tag 即从
+  仓库 secrets 导入签名证书、跑测试、打 DMG、对照仓库内公钥证书
+  （`certs/dialpilot-release.crt`）校验签名要求、发布 Release 并更新
+  Homebrew tap。贡献者全程不接触私钥。`.github/workflows/ci.yml` 在每次
+  push/PR 跑测试。
+- `scripts/create-signing-cert.sh`：维护者一次性初始化——20 年期代码签名
+  证书进专用钥匙串，公钥进仓库，加密 `.p12` 备份供密码管理器 / CI secret。
+- `certs/dialpilot-release.crt`：公钥证书，任何人可校验下载物的
+  `certificate leaf` 锚定是否出自项目私钥。
+
+### 变更
+
+- `make-dmg.sh` 用「DialPilot Release」身份签名，并**拒绝打包 cdhash 锚定
+  的产物**（ad-hoc 回退仅限本地测试）。
+- `release.sh` 默认走 CI 路径（升版本 → 提交 → tag → 推送 → watch）；
+  `--local` 保留旧的全本机流程。
+- README ×2、用户指南 ×2、cask caveats：「每次升级重授」改为「跨 1.1.4 →
+  1.1.5 时最后一次重授」。
+
 ## [1.1.4] — 2026-11-23
 
 「插着却显示未连接」版本。Ulanzi Studio 运行时独占旋钮、DialPilot 主动让位——

@@ -1,0 +1,138 @@
+name: Release
+
+# Mode-2 releases: pushing a v* tag builds, signs with the project's fixed
+# self-signed certificate (stored only as repo secrets), tests, publishes the
+# GitHub release and updates the Homebrew tap. Contributors never hold the
+# private key; merging a PR + a maintainer pushing a tag is the whole flow.
+#
+# Required repository secrets:
+#   DIALPILOT_SIGNING_P12    base64 of the release .p12 (cert + private key)
+#   DIALPILOT_P12_PASSWORD   password of that .p12
+#   TAP_REPO_TOKEN           PAT with repo scope on lichengwu/homebrew-tap
+#
+# The certificate's public half is committed at certs/dialpilot-release.crt;
+# the workflow verifies the built app's designated requirement is anchored to
+# that exact certificate before anything is published.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to (re)build, e.g. v1.1.5"
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    # arm64 runner: the app is Apple Silicon-only and codesign/security are
+    # macOS-native; no cross-compilation involved.
+    runs-on: macos-14
+    timeout-minutes: 45
+    env:
+      TAG: ${{ github.event.inputs.tag || github.ref_name }}
+    steps:
+      - name: Checkout the tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+
+      - name: Resolve version and check changelog
+        run: |
+          VERSION="${TAG#v}"
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          PLIST_VERSION=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" AppResources/Info.plist)
+          if [ "$PLIST_VERSION" != "$VERSION" ]; then
+            echo "tag $TAG does not match Info.plist version $PLIST_VERSION" >&2
+            exit 1
+          fi
+          grep -q "^## \[$VERSION\]" CHANGELOG.md || {
+            echo "CHANGELOG.md has no section for $VERSION" >&2; exit 1; }
+
+      - name: Import signing certificate
+        env:
+          P12_BASE64: ${{ secrets.DIALPILOT_SIGNING_P12 }}
+          P12_PASSWORD: ${{ secrets.DIALPILOT_P12_PASSWORD }}
+        run: |
+          test -n "$P12_BASE64" || { echo "DIALPILOT_SIGNING_P12 secret missing" >&2; exit 1; }
+          KC="$RUNNER_TEMP/dialpilot-release.keychain-db"
+          KC_PASS=$(openssl rand -hex 24)
+          printf '%s' "$P12_BASE64" | base64 --decode > "$RUNNER_TEMP/release.p12"
+          security create-keychain -p "$KC_PASS" "$KC"
+          security set-keychain-settings "$KC"
+          security unlock-keychain -p "$KC_PASS" "$KC"
+          security import "$RUNNER_TEMP/release.p12" -k "$KC" -P "$P12_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KC_PASS" "$KC" >/dev/null
+          security list-keychains -d user -s "$KC" $(security list-keychains -d user | tr -d '"')
+          rm -f "$RUNNER_TEMP/release.p12"
+          security find-identity -p codesigning "$KC" | grep "DialPilot Release"
+
+      - name: Test
+        run: swift test --arch arm64 --disable-sandbox
+
+      - name: Build and sign DMG
+        run: |
+          ./scripts/make-dmg.sh
+          # Belt and braces: the DR must be anchored to the committed public
+          # certificate, not to a cdhash and not to some other identity.
+          EXPECTED=$(openssl x509 -in certs/dialpilot-release.crt -noout -fingerprint -sha1 \
+            | cut -d= -f2 | tr -d ':' | tr 'A-F' 'a-f')
+          DR=$(codesign -d -r- ".build/app/DialPilot.app" 2>&1 || true)
+          MP=$(mktemp -d)
+          hdiutil attach -nobrowse -readonly -mountpoint "$MP" "dist/DialPilot-$VERSION.dmg" -quiet
+          ACTUAL=$(codesign -d -r- "$MP/DialPilot.app" 2>&1 | grep '^designated')
+          hdiutil detach "$MP" -quiet
+          echo "$ACTUAL"
+          case "$ACTUAL" in
+            *"certificate leaf = H\"$EXPECTED\""*) echo "certificate anchor OK" ;;
+            *) echo "DR does not match certs/dialpilot-release.crt" >&2; exit 1 ;;
+          esac
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          awk -v v="$VERSION" '
+            $0 ~ "^## \\[" v "\\]" { inside = 1; next }
+            inside && /^## \[/     { exit }
+            inside                 { print }
+          ' CHANGELOG.md > release-notes.md
+          gh release create "$TAG" \
+            "dist/DialPilot-$VERSION.dmg" "dist/DialPilot-$VERSION.dmg.sha256" \
+            --title "DialPilot $TAG" --notes-file release-notes.md \
+          || gh release upload "$TAG" \
+            "dist/DialPilot-$VERSION.dmg" "dist/DialPilot-$VERSION.dmg.sha256" --clobber
+
+      - name: Update Homebrew tap
+        env:
+          TAP_REPO_TOKEN: ${{ secrets.TAP_REPO_TOKEN }}
+        run: |
+          test -n "$TAP_REPO_TOKEN" || { echo "TAP_REPO_TOKEN secret missing" >&2; exit 1; }
+          git clone --depth 1 "https://x-access-token:$TAP_REPO_TOKEN@github.com/lichengwu/homebrew-tap.git" tap
+          SHA=$(cut -d' ' -f1 "dist/DialPilot-$VERSION.dmg.sha256")
+          CASK=tap/Casks/dialpilot.rb
+          test "$(grep -c '^  version "' "$CASK")" -eq 1
+          test "$(grep -c '^  sha256 "' "$CASK")" -eq 1
+          sed -i '' \
+            -e "s|^  version \".*\"$|  version \"$VERSION\"|" \
+            -e "s|^  sha256 \".*\"$|  sha256 \"$SHA\"|" "$CASK"
+          cd tap
+          git config user.name "dialpilot-release-bot"
+          git config user.email "actions@github.com"
+          git add Casks/dialpilot.rb
+          git diff --cached --quiet && { echo "cask already up to date"; exit 0; }
+          git commit -m "dialpilot $VERSION"
+          git push
+
+      - name: Clean up keychain
+        if: always()
+        run: |
+          KC="$RUNNER_TEMP/dialpilot-release.keychain-db"
+          security delete-keychain "$KC" 2>/dev/null || true

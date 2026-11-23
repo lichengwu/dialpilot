@@ -1,10 +1,14 @@
 #!/bin/sh
-# Cut a release end to end: bump -> test -> DMG -> commit/tag/push -> GitHub
-# release -> Homebrew cask.
+# Cut a release. Default path is CI (mode 2): bump -> commit -> tag -> push,
+# then GitHub Actions builds, signs with the project certificate (repo
+# secret), publishes the release and updates the tap. The private key never
+# leaves the secrets store.
 #
-#   ./scripts/release.sh 1.1.3            # full run (asks before pushing)
-#   ./scripts/release.sh 1.1.3 --yes      # no confirmation prompt
-#   ./scripts/release.sh 1.1.3 --dry-run  # print the plan, touch nothing
+#   ./scripts/release.sh 1.1.5            # CI release (asks before pushing)
+#   ./scripts/release.sh 1.1.5 --yes      # no confirmation prompt
+#   ./scripts/release.sh 1.1.5 --dry-run  # print the plan, touch nothing
+#   ./scripts/release.sh 1.1.5 --local    # legacy: build+sign+publish locally
+#                                         # (requires the release identity)
 #
 # Preconditions this script enforces, because every one of them has bitten a
 # release before:
@@ -28,13 +32,15 @@ BRANCH=main
 VERSION=
 ASSUME_YES=0
 DRY_RUN=0
+LOCAL_MODE=0
 
 for arg in "$@"; do
     case "$arg" in
         --yes|-y) ASSUME_YES=1 ;;
         --dry-run|-n) DRY_RUN=1 ;;
+        --local) LOCAL_MODE=1 ;;
         -h|--help)
-            sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//'
+            sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//'
             exit 0
             ;;
         -*)
@@ -81,7 +87,9 @@ grep -q "^## \[$VERSION\]" "$CHANGELOG" \
 command -v gh >/dev/null || die "gh CLI is not installed"
 gh auth status >/dev/null 2>&1 || die "gh is not authenticated (run: gh auth login)"
 
-[ -d "$TAP_DIR/Casks" ] || die "tap checkout not found at $TAP_DIR (set DIALPILOT_TAP_DIR)"
+if [ "$LOCAL_MODE" -eq 1 ]; then
+    [ -d "$TAP_DIR/Casks" ] || die "tap checkout not found at $TAP_DIR (set DIALPILOT_TAP_DIR)"
+fi
 
 OLD_VERSION=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$INFO_PLIST")
 OLD_BUILD=$(/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "$INFO_PLIST")
@@ -89,7 +97,9 @@ NEW_BUILD=$((OLD_BUILD + 1))
 DMG="$PROJECT_DIR/dist/DialPilot-$VERSION.dmg"
 
 step "Release plan"
-cat <<PLAN
+if [ "$LOCAL_MODE" -eq 1 ]; then
+    cat <<PLAN
+    mode:         LOCAL (build + sign + publish on this machine)
     version:      $OLD_VERSION ($OLD_BUILD)  ->  $VERSION ($NEW_BUILD)
     tag:          v$VERSION
     dmg:          $DMG
@@ -97,6 +107,16 @@ cat <<PLAN
     cask:         $TAP_DIR/Casks/dialpilot.rb (version + sha256, then push)
     steps:        swift test -> make-dmg -> commit -> tag -> push -> gh release -> update-cask
 PLAN
+else
+    cat <<PLAN
+    mode:         CI (GitHub Actions builds, signs with the repo-secret
+                  certificate, publishes the release, updates the tap)
+    version:      $OLD_VERSION ($OLD_BUILD)  ->  $VERSION ($NEW_BUILD)
+    tag:          v$VERSION
+    notes:        CHANGELOG.md section "[$VERSION]"
+    steps:        bump -> commit -> tag -> push  (CI does the rest)
+PLAN
+fi
 
 if [ "$DRY_RUN" -eq 0 ] && [ "$ASSUME_YES" -eq 0 ]; then
     printf '\nPush to origin/%s and publish the GitHub release? [y/N] ' "$BRANCH"
@@ -118,14 +138,16 @@ else
 fi
 
 # ------------------------------------------------------------------------ tests
-step "Tests"
-run swift test --arch arm64 --disable-sandbox
+if [ "$LOCAL_MODE" -eq 1 ]; then
+    step "Tests"
+    run swift test --arch arm64 --disable-sandbox
 
-# -------------------------------------------------------------------------- dmg
-step "Build DMG"
-run ./scripts/make-dmg.sh
-if [ "$DRY_RUN" -eq 0 ]; then
-    [ -f "$DMG" ] || die "make-dmg.sh did not produce $DMG"
+    # ---------------------------------------------------------------------- dmg
+    step "Build DMG"
+    run ./scripts/make-dmg.sh
+    if [ "$DRY_RUN" -eq 0 ]; then
+        [ -f "$DMG" ] || die "make-dmg.sh did not produce $DMG"
+    fi
 fi
 
 # --------------------------------------------------------------------- git side
@@ -146,27 +168,45 @@ else
     echo "    [dry-run] git add -A && git commit && git tag -a v$VERSION && git push"
 fi
 
-# -------------------------------------------------------------------- gh release
-step "GitHub release"
-NOTES_FILE="$PROJECT_DIR/.build/release-notes-$VERSION.md"
-if [ "$DRY_RUN" -eq 1 ]; then
-    echo "    [dry-run] gh release create v$VERSION $DMG $DMG.sha256"
-else
-    printf '%s\n' "$NOTES" > "$NOTES_FILE"
-    gh release create "v$VERSION" "$DMG" "$DMG.sha256" \
-        --title "DialPilot v$VERSION" --notes-file "$NOTES_FILE"
-fi
+if [ "$LOCAL_MODE" -eq 1 ]; then
+    # ---------------------------------------------------------------- gh release
+    step "GitHub release"
+    NOTES_FILE="$PROJECT_DIR/.build/release-notes-$VERSION.md"
+    if [ "$DRY_RUN" -eq 1 ]; then
+        echo "    [dry-run] gh release create v$VERSION $DMG $DMG.sha256"
+    else
+        printf '%s\n' "$NOTES" > "$NOTES_FILE"
+        gh release create "v$VERSION" "$DMG" "$DMG.sha256" \
+            --title "DialPilot v$VERSION" --notes-file "$NOTES_FILE"
+    fi
 
-# --------------------------------------------------------------------------- tap
-step "Homebrew cask"
-run ./scripts/update-cask.sh --commit
+    # ----------------------------------------------------------------------- tap
+    step "Homebrew cask"
+    run ./scripts/update-cask.sh --commit
 
-step "Done"
-cat <<DONE
+    step "Done"
+    cat <<DONE
     https://github.com/$REPO/releases/tag/v$VERSION
     brew update && brew upgrade --cask dialpilot
-
-    Reminder for the announcement: this build is ad-hoc signed, so anyone
-    upgrading loses the Input Monitoring / Accessibility grants once. The
-    switches still look on — they must be turned off and back on.
 DONE
+else
+    step "CI takes over"
+    if [ "$DRY_RUN" -eq 1 ]; then
+        echo "    [dry-run] gh run watch (release workflow triggered by the tag)"
+    else
+        # Give Actions a moment to register the run, then follow it.
+        sleep 8
+        RUN_ID=$(gh run list -R "$REPO" --workflow release.yml --limit 1 \
+            --json databaseId --jq '.[0].databaseId')
+        if [ -n "$RUN_ID" ]; then
+            gh run watch "$RUN_ID" -R "$REPO" --exit-status || die "CI release failed — see the run log"
+        else
+            echo "    no run registered yet; watch: gh run watch -R $REPO"
+        fi
+    fi
+    step "Done"
+    cat <<DONE
+    https://github.com/$REPO/releases/tag/v$VERSION
+    brew update && brew upgrade --cask dialpilot
+DONE
+fi

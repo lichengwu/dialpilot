@@ -81,9 +81,8 @@
 
 - 任一权限缺失时，面板会显示**权限横幅 + 一键授权按钮**；按钮直达对应设置面板（macOS 支持时同时触发系统弹窗）。
 - 授权后重新打开面板即可——每次打开都会重新检测。输入监控授权有时需要重启 App 才生效；若手势仍未启用，退出并重新打开 DialPilot。
-- **签名决定授权能不能活下来。** macOS 把 TCC 授权绑定到 App 的**代码签名要求（designated requirement）**，不是 bundle ID。分发的版本是 ad-hoc 签名，而 ad-hoc 的要求就是 `cdhash H"…"`——精确到二进制哈希这一条。所以**每个版本都是新身份**：升级后旧授权不再匹配，但系统设置里条目还在（列表按 bundle ID 生成）、开关还是开的。这个「开关看着是开的、权限却拿不到」就是这个机制，不是 App 的 bug。
-  **解法**：系统设置 → 隐私与安全性 → 对应权限 → 把 DialPilot 先**关掉再打开**，然后重启 App。开关本来就是开的时候没法「再打开」，只有先关再开才会重写存下来的签名要求。
-  只有公证过的 Developer ID 构建能跨版本保持同一个签名要求，升级才不会反复问。macOS 到底记了什么，可以用 [用户指南 §10](docs/user-guide.md#10-排障) 里的一行命令查。
+- **签名决定授权能不能活下来。** macOS 把 TCC 授权绑定到 App 的**代码签名要求（designated requirement）**，不是 bundle ID。**1.1.5 起**每个发布版都用同一张固定项目证书（[公钥在仓库里](certs/dialpilot-release.crt)）签名，要求是 `identifier + certificate leaf`——跨版本完全一致，**升级不再掉授权**。≤1.1.4 是 ad-hoc 签名（要求 = 二进制的 `cdhash`），所以那时每个版本都是新身份。
+  **从 ≤1.1.4 升到 ≥1.1.5 时需要最后一次**：系统设置 → 隐私与安全性 → 对应权限 → 把 DialPilot **关掉再打开**，然后重启 App。这一下就写入了新的证书锚定要求，之后的更新永远不再问。（如果开关看着是开的、权限却没生效，那是旧构建留下的陈旧要求——同样关掉再打开即可。macOS 到底记了什么，见 [用户指南 §10](docs/user-guide.md#10-排障)。）
 - 不申请其他权限：不联网（可选的 QwenWork 监听仅绑 127.0.0.1）、不用摄像头/麦克风、不读写 `~/Library/Application Support/DialPilot` 与你明确接入的 Agent 配置之外的文件。
 
 ## 首次使用前（一次性，用 Ulanzi Studio 完成）
@@ -135,7 +134,13 @@ curl -fsSL https://raw.githubusercontent.com/lichengwu/dialpilot/main/scripts/in
 
 「仍要打开」只在被拦那次启动后约一小时内出现——找不到就再双击一次 App，然后立刻回系统设置。终端等价命令：`xattr -dr com.apple.quarantine /Applications/DialPilot.app`。
 
-**签名说明（不粉饰）**：发布映像用 **ad-hoc 签名**，没有 Apple 证书、**未公证**。这是刻意的：Apple Development 签名对下载者毫无帮助（照样被 Gatekeeper 拦），还会在证书过期后连带旧版本一起失效。要做到双击直开，必须有 Developer ID 证书 + 公证，那需要付费加入 Apple Developer Program（¥688/年），本项目没有。Homebrew 与脚本两条通道之所以不弹窗，是因为文件由它们自己下载，不带浏览器的隔离标记。
+**签名说明（不粉饰）**：发布映像用**固定的自签项目证书**签名（[公钥在仓库里](certs/dialpilot-release.crt)），**未公证**——本项目没有付费 Apple Developer 会员（¥688/年），所以浏览器下载的弹窗去不掉。固定证书买到的是**稳定的代码身份**：输入监控/辅助使用授权跨升级保留（ad-hoc 时代每版都掉）。Homebrew 与脚本两条通道之所以不弹窗，是因为文件由它们自己下载，不带浏览器的隔离标记。想校验下载物确实出自本项目私钥：
+
+```sh
+codesign -d -r- /Applications/DialPilot.app
+# designated => identifier "dev.lichengwu.dialpilot" and certificate leaf = H"bb3bab5a…"
+openssl x509 -in certs/dialpilot-release.crt -noout -fingerprint -sha1   # 两者必须一致
+```
 
 然后：
 1. 完全退出 Ulanzi Studio（两个宿主会抢设备）。
@@ -156,25 +161,34 @@ swift test --disable-sandbox        # 277 个测试应全绿（Core 252 + App 25
 ./scripts/make-dmg.sh               # 产物 dist/DialPilot-<version>.dmg + .sha256
 ```
 
-**签名很重要，而且两种构建刻意不同**：macOS 把输入监控/辅助使用授权绑定到代码签名，ad-hoc 签名每次重编都换身份，会悄悄让你刚给的授权失效。所以：
+**签名很重要，而且两种构建刻意不同**：macOS 把输入监控/辅助使用授权绑定到代码签名，所以两个脚本都用**固定身份**、绝不 ad-hoc，让授权稳定：
 
-- `build-app.sh`（给你自己装的那份）自动挑本机第一张 **Apple Development** 证书，让授权跨重编稳定。要指定：`DIALPILOT_SIGNING_IDENTITY="Apple Development: …"`。
-- `make-dmg.sh`（给别人下载的那份）只对**暂存副本**重签成 **ad-hoc**，不碰 `.build/app`。ad-hoc 不会过期，旧版本永远能开；将来有 Developer ID 时用 `DIALPILOT_RELEASE_IDENTITY="Developer ID Application: …"` 替换。
+- `build-app.sh`（给你自己装的那份）自动挑本机第一张 **Apple Development** 证书。要指定：`DIALPILOT_SIGNING_IDENTITY="Apple Development: …"`。
+- `make-dmg.sh`（给别人下载的那份）只对**暂存副本**用 **「DialPilot Release」自签身份**重签，不碰 `.build/app`。它会拒绝打包 cdhash 锚定（ad-hoc）的产物，杜绝会掉授权的包被误发。贡献者机器上没有该身份时回退 ad-hoc，仅供本地测试。将来有 Developer ID 时用 `DIALPILOT_RELEASE_IDENTITY="Developer ID Application: …"` 替换。
 
-### 发版
+同一台机器别混装两种身份：Apple Development 构建与发布构建互切会掉一次授权（身份不同）。
+
+### 发版（CI，模式 2）
 
 ```sh
-./scripts/release.sh 1.1.3 --dry-run   # 只打印计划，不动任何文件
-./scripts/release.sh 1.1.3             # 真发
+./scripts/release.sh 1.1.5 --dry-run   # 只打印计划，不动任何文件
+./scripts/release.sh 1.1.5             # 升版本、提交、打 tag、推送——其余交给 CI
 ```
 
-先在 `CHANGELOG.md` 写好 `## [1.1.3]` 段落——脚本没有它就拒绝执行，并把这个段落
-原样当作发布说明，所以发布说明不会和变更日志脱节。之后它自增 `CFBundleVersion`、
-跑测试、构建并 ad-hoc 签名 DMG、推送 `main` 与 tag、用 `.dmg` 和 `.sha256` 建
-GitHub Release，最后把新版本号与校验和写进 `../homebrew-tap`。**另一台机器上
-`brew upgrade --cask dialpilot` 能拿到新版，才算发完。**
+先在 `CHANGELOG.md` 写好 `## [1.1.5]` 段落——脚本和 CI 没有它都拒绝执行，且该段落
+原样成为发布说明。推 tag 触发 `.github/workflows/release.yml`：**从仓库
+secrets 导入签名证书** → 跑测试 → 打 DMG → 校验签名要求锚定
+`certs/dialpilot-release.crt` → 发布 Release（`.dmg` + `.sha256`）→ 更新
+Homebrew tap。**贡献者全程不接触私钥**；合并 PR + 维护者推 tag 就是从贡献到
+发布的完整路径。
 
-`./scripts/update-cask.sh` 就是最后那一步的单独版本，需要时单独跑。
+私钥只存在于 GitHub Actions secrets（外加维护者密码管理器里的加密备份）；
+公钥证书进仓库，`*.p12` / `*.key` / `*.pass` 已被 gitignore。
+`scripts/create-signing-cert.sh` 是维护者的一次性初始化；**私钥丢失 = 全体
+用户重授一次**，务必备份。
+
+`./scripts/release.sh 1.1.5 --local` 是旧的全本机路径（需本机持有发布身份）；
+`./scripts/update-cask.sh` 单独更新 tap。
 
 ## 使用
 

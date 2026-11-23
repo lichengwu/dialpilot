@@ -81,9 +81,8 @@ DialPilot needs two macOS permissions for gestures and agent lights. **Without t
 
 - The app panel shows a **permission banner with one-click grant buttons** whenever either is missing; each button opens the exact Settings pane (and triggers the native prompt where macOS supports it).
 - After granting, reopen the panel — status is re-checked every time it opens. Input Monitoring grants sometimes need an app restart to take effect; quit and relaunch DialPilot if gestures still don't start.
-- **Signing decides whether a grant survives.** macOS ties a TCC grant to the app's *code signing requirement*, not to its bundle ID. The distributed build is ad-hoc signed, and an ad-hoc requirement is nothing but `cdhash H"…"` — a hash of the exact binary. So **every release is a new identity**: after an upgrade the old grant no longer matches, while System Settings still lists the app (the list is built from bundle IDs) and shows the switch as enabled. That combination — switch looks on, permission still missing — is this, not a bug in the app.
-  **Fix:** System Settings → Privacy & Security → the permission → turn DialPilot **off and back on**, then relaunch. An already-on switch cannot be re-toggled, and off-then-on is what rewrites the stored requirement.
-  Only a notarized Developer ID build keeps one stable requirement across versions, so upgrades stop asking. See [Troubleshooting](docs/user-guide.en.md#10-troubleshooting) for the one-liner that shows what macOS currently has on file.
+- **Signing decides whether a grant survives.** macOS ties a TCC grant to the app's *code signing requirement*, not to its bundle ID. Since **1.1.5** every release is signed with the same fixed project certificate ([`certs/dialpilot-release.crt`](certs/dialpilot-release.crt)), so the requirement is `identifier + certificate leaf` — identical across versions, and **grants survive updates**. Versions ≤1.1.4 were ad-hoc signed (requirement = the binary's `cdhash`), which made every release a new identity.
+  **One last time, when upgrading from ≤1.1.4 to ≥1.1.5:** System Settings → Privacy & Security → the permission → turn DialPilot **off and back on**, then relaunch. That writes the new certificate-anchored requirement; later updates never ask again. (If a switch looks on but the permission is missing, that is a stale requirement from an older build — the same off-then-on fixes it. See [Troubleshooting](docs/user-guide.en.md#10-troubleshooting).)
 - No other permissions are requested: no network access (the optional QwenWork listener binds 127.0.0.1 only), no camera/microphone, no files outside `~/Library/Application Support/DialPilot` and the agent config files you explicitly connect.
 
 ## Before first use (one-time, with Ulanzi Studio)
@@ -134,7 +133,13 @@ It resolves the latest release, verifies the image against the published SHA-256
 
 *Open Anyway* only stays for about an hour after the blocked launch — if it is gone, double-click the app again and go straight back. The terminal equivalent is `xattr -dr com.apple.quarantine /Applications/DialPilot.app`.
 
-**Signing, stated plainly:** release images are **ad-hoc signed** — no Apple certificate, **not notarized**. That is deliberate. An Apple Development signature would not help a downloader (Gatekeeper rejects both) and would stop verifying when the certificate expires. Removing the dialog entirely needs a Developer ID certificate plus notarization, which requires a paid Apple Developer Program membership (¥688/year); this is a hobby project without one. The Homebrew and script channels sidestep the dialog because they fetch the file themselves instead of leaving a browser quarantine flag on it.
+**Signing, stated plainly:** release images are signed with a **fixed self-signed project certificate** ([public half in the repo](certs/dialpilot-release.crt)) and are **not notarized** — this is a hobby project without a paid Apple Developer membership (¥688/year), so the browser-download dialog cannot be removed. What the fixed certificate buys: a stable code identity, so **Input Monitoring / Accessibility grants survive every update** (ad-hoc signing used to break them each release). The Homebrew and script channels sidestep the dialog entirely because they fetch the file themselves instead of leaving a browser quarantine flag on it. To verify a download really came from this project's key:
+
+```sh
+codesign -d -r- /Applications/DialPilot.app
+# designated => identifier "dev.lichengwu.dialpilot" and certificate leaf = H"bb3bab5a…"
+openssl x509 -in certs/dialpilot-release.crt -noout -fingerprint -sha1   # must match
+```
 
 Then:
 1. Quit Ulanzi Studio completely (two hosts fight over the device).
@@ -155,28 +160,38 @@ swift test --disable-sandbox        # 277 tests should pass (Core 252 + App 25)
 ./scripts/make-dmg.sh               # artifact: dist/DialPilot-<version>.dmg + .sha256
 ```
 
-**Signing matters, and the two builds differ on purpose.** macOS ties Input Monitoring / Accessibility grants to the code signature, and an ad-hoc signature changes identity on every rebuild — which silently invalidates the permissions you just granted. So:
+**Signing matters, and the two builds differ on purpose.** macOS ties Input Monitoring / Accessibility grants to the code signature, so both scripts use a *fixed* identity — never ad-hoc — to keep grants stable:
 
-- `build-app.sh` (your local copy) picks your first **Apple Development** identity automatically, keeping those grants stable across rebuilds. Pin one with `DIALPILOT_SIGNING_IDENTITY="Apple Development: …"`.
-- `make-dmg.sh` (what other people download) re-signs the *staged copy* **ad-hoc** and never touches `.build/app`. Ad-hoc cannot expire, so old releases keep working; a Developer ID identity can be substituted once one exists: `DIALPILOT_RELEASE_IDENTITY="Developer ID Application: …"`.
+- `build-app.sh` (your local copy) picks your first **Apple Development** identity automatically. Pin one with `DIALPILOT_SIGNING_IDENTITY="Apple Development: …"`.
+- `make-dmg.sh` (what other people download) re-signs the *staged copy* with the **"DialPilot Release"** self-signed identity and never touches `.build/app`. It refuses to package a cdhash-anchored (ad-hoc) build so a grant-breaking artifact can never ship by accident. On a contributor machine without the identity it falls back to ad-hoc for local testing only. A Developer ID can be substituted once one exists: `DIALPILOT_RELEASE_IDENTITY="Developer ID Application: …"`.
 
-### Releasing
+Do not mix identities on one machine: switching between an Apple Development build and the release build costs one re-grant (the identities differ).
+
+### Releasing (CI, mode 2)
 
 ```sh
-./scripts/release.sh 1.1.3 --dry-run   # print the plan, change nothing
-./scripts/release.sh 1.1.3             # do it
+./scripts/release.sh 1.1.5 --dry-run   # print the plan, change nothing
+./scripts/release.sh 1.1.5             # bump, commit, tag, push — CI does the rest
 ```
 
-Write the `## [1.1.3]` section in `CHANGELOG.md` first — the script refuses to
-run without it and reuses that section verbatim as the release notes, so the
-notes cannot drift from the changelog. It then bumps `CFBundleVersion`, runs the
-test suite, builds and ad-hoc signs the DMG, pushes `main` + tag, publishes the
-GitHub release with the `.dmg` and its `.sha256`, and finally writes the new
-version and checksum into `../homebrew-tap`. A release is only finished when
-`brew upgrade --cask dialpilot` on another machine picks it up.
+Write the `## [1.1.5]` section in `CHANGELOG.md` first — both the script and the
+CI workflow refuse to run without it, and the section becomes the release
+notes verbatim. Pushing the tag triggers `.github/workflows/release.yml`:
+import the signing certificate **from repo secrets** → run the test suite →
+build the DMG → verify its designated requirement matches
+`certs/dialpilot-release.crt` → publish the release (`.dmg` + `.sha256`) →
+update the Homebrew tap. **Contributors never hold the private key**; merging
+PRs and pushing a tag is the whole contribution-to-release path.
 
-`./scripts/update-cask.sh` is that last step on its own, for when you need it
-separately.
+The private key lives only in GitHub Actions secrets (plus the maintainer's
+password-manager backup). The public certificate is committed; `*.p12`,
+`*.key`, `*.pass` are gitignored. `scripts/create-signing-cert.sh` is the
+one-time maintainer setup; losing the key means every user re-grants once, so
+back it up.
+
+`./scripts/release.sh 1.1.5 --local` is the legacy all-on-this-machine path
+(requires the release identity locally); `./scripts/update-cask.sh` updates
+the tap on its own.
 
 ## Usage
 

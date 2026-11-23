@@ -24,22 +24,22 @@
 
 ### Upgrading
 
-**The brew cask (ad-hoc signed) — the grant is lost once, every time**
-
 ```sh
 brew update
 brew upgrade --cask dialpilot      # tells you if there is nothing newer
 ```
 
-`brew upgrade` on a cask is a reinstall: Homebrew uninstalls the old artifacts and installs the new ones (`reinstall: true` + `uninstall(successor:)` in its source), which is exactly "delete the app and install it again". The distributed build is ad-hoc signed, and an ad-hoc requirement is a single `cdhash H"…"`; a new binary means a new cdhash, so the old grant cannot match.
+`brew upgrade` on a cask is a reinstall: Homebrew uninstalls the old artifacts and installs the new ones (`reinstall: true` + `uninstall(successor:)` in its source), which is exactly "delete the app and install it again". Whether the grants survive depends on whether the signing identity changed:
 
-After upgrading, once:
+**≥1.1.5: fixed project certificate — grants survive updates.** Every release is signed with the same self-signed certificate (public half at `certs/dialpilot-release.crt`); the requirement is `identifier + certificate leaf`, identical across versions. Just upgrade.
+
+**Coming from ≤1.1.4: one last re-grant.** Old versions were ad-hoc signed (requirement = the binary's cdhash, different every release), so switching to the certificate identity breaks the old grant once:
 
 1. System Settings → Privacy & Security → **Input Monitoring** → turn DialPilot **off, then back on**;
 2. the same for **Accessibility**;
 3. quit and relaunch DialPilot.
 
-Step 1 and 2 have to be a toggle: a switch that is already on cannot be re-confirmed by looking at it, and only off-then-on rewrites the stored requirement. See the last section of §10.
+Steps 1 and 2 have to be a toggle: a switch that is already on cannot be re-confirmed by looking at it, and only off-then-on rewrites the stored requirement. See the last section of §10. After this, upgrades never ask again.
 
 **Your own build (same certificate) — the grants carry over**
 
@@ -216,9 +216,9 @@ Manual items in live mode accept `s` to skip; they never auto-pass.
 | A manual state gets "stolen" | Real-hook arbitration (see §7); uninstall hooks for clean tests |
 | A light turns itself off after ~10 s | Expected `attention` behavior (completion bell) |
 | The voice-key LED flashes on its own | Firmware key feedback; the host cannot control it |
-| Grants keep disappearing | Ad-hoc signature; every rebuild/upgrade is a new identity (see §1). Off-then-on fixes it |
+| Grants keep disappearing | The ≤1.1.4 ad-hoc releases changed identity every version; fixed by upgrading to ≥1.1.5 (fixed certificate). Off-then-on restores the current one |
 | **The switch is on but the app still has no permission** | TCC lists entries by bundle ID and decides by *signing requirement*. Any replaced app (upgrade, reinstall, identity change) ends up "enabled but ineffective". Turn the switch **off and back on**, then relaunch |
-| Gestures and lights die right after an upgrade | Expected for the ad-hoc distributed build: cdhash changes every version (see §1) |
+| Gestures and lights die right after an upgrade | Expected once when crossing ≤1.1.4 → ≥1.1.5 (see §1); between ≥1.1.5 versions it should not happen — file an issue with `codesign -d -r-` output if it does |
 | Hooks installed but nothing happens | Codex needs `/hooks` approval; DSH needs a restart; others need a new session |
 | Device buttons stopped working | After an unexpected app exit the firmware reverts to native; relaunch the app |
 

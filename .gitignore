@@ -17,3 +17,8 @@ DerivedData/
 
 # Release DMGs
 dist/
+
+# Signing key material — NEVER commit (public cert lives in certs/)
+*.p12
+*.key
+*.pass

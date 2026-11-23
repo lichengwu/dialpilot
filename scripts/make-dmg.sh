@@ -4,16 +4,19 @@
 #   ./scripts/make-dmg.sh                 # build + package -> dist/DialPilot-<version>.dmg
 #   ./scripts/make-dmg.sh --skip-build    # package the existing .build/app/DialPilot.app
 #
-# Release artifacts are signed **ad-hoc** by default, on purpose:
-#   * Gatekeeper rejects a non-notarized download either way, so an Apple
-#     Development signature buys the downloader nothing;
-#   * an Apple Development signature without a timestamp stops verifying once
-#     the certificate expires (~1 year), which turns every old release into
-#     "app is damaged" for new downloaders. Ad-hoc has no certificate chain,
-#     so it never expires.
-# A stable local identity still matters for *your own* installed build (macOS
-# ties Input Monitoring / Accessibility grants to the signature) — that is
-# build-app.sh's job, and this script does not touch .build/app.
+# Release artifacts are signed with the fixed self-signed identity
+# "DialPilot Release" (scripts/create-signing-cert.sh). Why not ad-hoc:
+#   * TCC pins Input Monitoring / Accessibility grants to the designated
+#     requirement; ad-hoc's requirement is the binary cdhash, so EVERY
+#     release invalidated the grants. With the fixed certificate the
+#     requirement is `identifier + certificate leaf` — stable across
+#     releases, grants survive updates.
+#   * The certificate is valid 20 years and self-signed (no chain to
+#     expire); Gatekeeper behaviour is the same as ad-hoc (not notarized).
+# Falls back to ad-hoc ONLY if the identity is absent (e.g. a contributor's
+# machine) — such builds are for local testing, never for publishing.
+# This script does not touch .build/app (your locally installed build keeps
+# its Apple Development identity).
 #
 # Override the release identity when a Developer ID + notarization is available:
 #   DIALPILOT_RELEASE_IDENTITY="Developer ID Application: ..." ./scripts/make-dmg.sh
@@ -44,7 +47,18 @@ done
 VERSION=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$INFO_PLIST")
 DMG_PATH="$DIST_DIR/$APP_NAME-$VERSION.dmg"
 SHA_PATH="$DMG_PATH.sha256"
-RELEASE_IDENTITY=${DIALPILOT_RELEASE_IDENTITY:--}
+
+# Prefer the fixed release identity; ad-hoc is a local-only fallback.
+if [ -n "${DIALPILOT_RELEASE_IDENTITY:-}" ]; then
+    RELEASE_IDENTITY=$DIALPILOT_RELEASE_IDENTITY
+elif security find-identity -p codesigning 2>/dev/null | grep -q '"DialPilot Release"'; then
+    RELEASE_IDENTITY="DialPilot Release"
+else
+    RELEASE_IDENTITY="-"
+    echo "warning: 'DialPilot Release' identity not found — falling back to ad-hoc." >&2
+    echo "warning: ad-hoc builds must NOT be published (grants break on every update)." >&2
+    echo "warning: run scripts/create-signing-cert.sh (maintainer) or use CI releases." >&2
+fi
 
 if [ "$SKIP_BUILD" -eq 0 ]; then
     "$PROJECT_DIR/build-app.sh" >/dev/null
@@ -73,6 +87,22 @@ for helper in "$STAGED_APP/Contents/MacOS/"*; do
 done
 codesign --force --sign "$RELEASE_IDENTITY" --identifier "$BUNDLE_ID" "$STAGED_APP"
 codesign --verify --strict "$STAGED_APP"
+
+# Publishing gate: a real release must carry the certificate-anchored
+# requirement, never a cdhash one. DIALPILOT_ALLOW_ADHOC=1 opts out for
+# local experiments only.
+if [ "${DIALPILOT_ALLOW_ADHOC:-0}" != "1" ]; then
+    DR=$(codesign -d -r- "$STAGED_APP" 2>&1 | grep '^designated' || true)
+    case "$DR" in
+        *"certificate leaf"*) ;;
+        *)
+            echo "refusing to package: designated requirement is not certificate-anchored:" >&2
+            echo "  $DR" >&2
+            echo "publishing this would break TCC grants on every update." >&2
+            exit 1
+            ;;
+    esac
+fi
 
 mkdir -p "$DIST_DIR"
 rm -f "$DMG_PATH" "$SHA_PATH"
