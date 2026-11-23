@@ -19,8 +19,11 @@
 #   - certs/dialpilot-release.crt  : PUBLIC certificate, committed to the repo
 #     so anyone can verify a download was signed by the project key
 #   - ~/dialpilot-release-backup.p12 : ENCRYPTED private-key backup.
-#     Move it into your password manager, then delete the file. NEVER commit
-#     it. If this key is lost, every user must re-grant permissions once.
+#     Store it off-machine (e.g. iCloud Drive/Backups/…), keep the password
+#     SEPARATELY (a Keychain Access item works; the Passwords app cannot
+#     hold files), then trash the home-directory copies. NEVER commit it.
+#     GitHub secrets are write-only — the key CANNOT be recovered from
+#     GitHub. If this key is lost, every user must re-grant once.
 #
 # Idempotent: refuses to run if the identity already exists.
 set -eu
@@ -90,7 +93,8 @@ echo "public:    $CERT_OUT  (commit this)"
 echo "fingerprint (sha1):"
 openssl x509 -in "$CERT_OUT" -noout -fingerprint -sha1 | sed 's/^/  /'
 echo
-echo "PRIVATE backup (move to your password manager, then delete both files):"
+echo "PRIVATE backup (copy to iCloud Drive or similar; keep the password"
+echo "separately in a Keychain Access item; then trash both local files):"
 echo "  $BACKUP_P12"
 echo "  $BACKUP_P12.pass"
 echo

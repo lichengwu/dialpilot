@@ -6,6 +6,14 @@ All notable changes to DialPilot are documented here. The format follows
 
 中文版：[CHANGELOG.zh.md](CHANGELOG.zh.md)
 
+## [1.1.6] — 2026-11-23
+
+Documentation-only: the signing-key backup guidance now matches the setup
+that actually shipped — encrypted `.p12` in iCloud Drive, password + base64
+copy in a Keychain Access item — and states plainly that GitHub secrets are
+write-only, so the key cannot be recovered from GitHub. No app changes;
+upgrading from 1.1.5 keeps all permissions (same certificate).
+
 ## [1.1.5] — 2026-11-23
 
 The last re-grant. Releases are now signed with a **fixed self-signed project

@@ -183,11 +183,13 @@ build the DMG → verify its designated requirement matches
 update the Homebrew tap. **Contributors never hold the private key**; merging
 PRs and pushing a tag is the whole contribution-to-release path.
 
-The private key lives only in GitHub Actions secrets (plus the maintainer's
-password-manager backup). The public certificate is committed; `*.p12`,
-`*.key`, `*.pass` are gitignored. `scripts/create-signing-cert.sh` is the
-one-time maintainer setup; losing the key means every user re-grants once, so
-back it up.
+The private key lives in GitHub Actions secrets plus the maintainer's offline
+backups: the encrypted `.p12` in iCloud Drive and a Keychain Access item
+holding the password and a base64 copy. **GitHub secrets are write-only — the
+key cannot be recovered from GitHub**, so those backups are the last line of
+defence; losing the key means every user re-grants once. The public
+certificate is committed; `*.p12`, `*.key`, `*.pass` are gitignored.
+`scripts/create-signing-cert.sh` is the one-time maintainer setup.
 
 `./scripts/release.sh 1.1.5 --local` is the legacy all-on-this-machine path
 (requires the release identity locally); `./scripts/update-cask.sh` updates

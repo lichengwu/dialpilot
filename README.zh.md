@@ -182,10 +182,11 @@ secrets 导入签名证书** → 跑测试 → 打 DMG → 校验签名要求锚
 Homebrew tap。**贡献者全程不接触私钥**；合并 PR + 维护者推 tag 就是从贡献到
 发布的完整路径。
 
-私钥只存在于 GitHub Actions secrets（外加维护者密码管理器里的加密备份）；
-公钥证书进仓库，`*.p12` / `*.key` / `*.pass` 已被 gitignore。
-`scripts/create-signing-cert.sh` 是维护者的一次性初始化；**私钥丢失 = 全体
-用户重授一次**，务必备份。
+私钥存在于 GitHub Actions secrets 与维护者的离线备份：加密 `.p12` 放
+iCloud Drive，密码和 base64 副本放「钥匙串访问」条目。**GitHub secrets
+只写不可读——私钥无法从 GitHub 取回**，这些备份就是最后防线；私钥丢失 =
+全体用户重授一次。公钥证书进仓库，`*.p12` / `*.key` / `*.pass` 已被
+gitignore。`scripts/create-signing-cert.sh` 是维护者的一次性初始化。
 
 `./scripts/release.sh 1.1.5 --local` 是旧的全本机路径（需本机持有发布身份）；
 `./scripts/update-cask.sh` 单独更新 tap。
