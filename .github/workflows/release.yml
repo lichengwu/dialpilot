@@ -34,7 +34,7 @@ jobs:
   release:
     # arm64 runner: the app is Apple Silicon-only and codesign/security are
     # macOS-native; no cross-compilation involved.
-    runs-on: macos-14
+    runs-on: macos-latest
     timeout-minutes: 45
     env:
       TAG: ${{ github.event.inputs.tag || github.ref_name }}
