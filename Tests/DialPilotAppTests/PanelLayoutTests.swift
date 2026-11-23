@@ -229,6 +229,63 @@ final class PanelOverflowTests: XCTestCase {
             }
         }
     }
+
+    /// The Studio banner is a blocker of the same severity as the permission
+    /// banner: while it is up, the quit button must be visible, full-width
+    /// (never squeezed), and nothing may overflow — both languages.
+    func testStudioBannerShowsQuitButtonWithoutOverflow() {
+        defer { L10n.language = .system }
+        for lang in [DialLanguage.english, .chinese] {
+            L10n.language = lang
+            let vc = SettingsViewController(configuration: .default)
+            vc.update(
+                configuration: .default, listenerActive: false,
+                accessibilityGranted: true, inputMonitoringGranted: true,
+                deviceConnected: false, vendorRunning: true,
+                powerStatus: DialPowerSnapshot(),
+                powerSaving: false, hardwareSyncInProgress: false,
+                notice: L10n.text(.noticeStudioRunning)
+            )
+            _ = vc.view
+            vc.view.layoutSubtreeIfNeeded()
+
+            let button = vc.view.allDescendants()
+                .compactMap { $0 as? NSButton }
+                .first { $0.identifier?.rawValue == "quitStudioButton" }
+            guard let button else {
+                XCTFail("\(lang): quit-studio button not found")
+                continue
+            }
+            XCTAssertFalse(button.isHidden, "\(lang): banner button hidden while Studio runs")
+            XCTAssertGreaterThanOrEqual(
+                button.frame.width + 0.5, button.intrinsicContentSize.width,
+                "\(lang): quit-studio button squeezed"
+            )
+            XCTAssertEqual(vc.preferredContentSize.width, 380, "\(lang): width drifted")
+
+            for stack in vc.view.allStacks() where !stack.isHidden {
+                for (index, child) in stack.arrangedSubviews.enumerated() where !child.isHidden {
+                    XCTAssertLessThanOrEqual(
+                        child.alignmentRect(forFrame: child.frame).maxX,
+                        stack.bounds.width + 0.5,
+                        "\(lang): studio-banner stack[\(index)] overflows"
+                    )
+                }
+            }
+
+            // Studio gone → banner must disappear again.
+            vc.update(
+                configuration: .default, listenerActive: true,
+                accessibilityGranted: true, inputMonitoringGranted: true,
+                deviceConnected: true, vendorRunning: false,
+                powerStatus: DialPowerSnapshot(),
+                powerSaving: false, hardwareSyncInProgress: false, notice: nil
+            )
+            vc.view.layoutSubtreeIfNeeded()
+            XCTAssertTrue(button.superview?.isHidden == true,
+                          "\(lang): banner still visible after Studio exited")
+        }
+    }
 }
 
 private extension NSView {

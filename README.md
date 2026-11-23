@@ -6,7 +6,7 @@
 [![macOS 13+](https://img.shields.io/badge/macOS-13%2B-lightgrey.svg)](https://www.apple.com/macos/)
 [![Apple Silicon](https://img.shields.io/badge/Apple%20Silicon-arm64-orange.svg)](https://support.apple.com/en-us/116943)
 [![Swift 5.9+](https://img.shields.io/badge/Swift-5.9%2B-F05138.svg)](https://swift.org)
-[![Tests](https://img.shields.io/badge/tests-271%20passing-brightgreen.svg)](#install)
+[![Tests](https://img.shields.io/badge/tests-277%20passing-brightgreen.svg)](#install)
 [![Dependencies](https://img.shields.io/badge/dependencies-0-brightgreen.svg)](Package.swift)
 
 [中文文档](README.zh.md)
@@ -99,13 +99,14 @@ No account binding or key mapping in Studio is required for DialPilot — it wri
 
 ### Keep Ulanzi Studio closed
 
-Two hosts cannot drive the AU05 at the same time. DialPilot handles this defensively:
+Two hosts cannot drive the AU05 at the same time — **while Studio runs, DialPilot shows "not connected" even with the dial plugged in**. That is the handover working, not a broken cable. DialPilot handles it end to end:
 
-- **At startup**: if Studio is running, DialPilot stays out of the device and tells you; the native six keys keep working.
-- **During a device write**: if Studio is running, DialPilot quits it on your behalf (graceful first, force after 4 s) before writing, and warns if it survives both.
-- **If Studio opens while DialPilot is running**: DialPilot immediately hands the device back to native mode and restores the light baseline; when Studio quits, DialPilot reconnects automatically.
+- **A banner with a "Quit Ulanzi Studio" button** appears in the panel whenever Studio is running — same severity as the missing-permission banner. One click quits it (graceful first, force after 4 s).
+- **Automatic recovery**: once Studio exits — by the button, by you, or by a crash — DialPilot takes the device back on its own. No app restart needed. Recovery is driven by observing Studio's presence on every UI refresh, not by macOS launch/quit notifications (those can be missed; that was a real bug fixed in 1.1.4).
+- **At startup**: if Studio is already running, DialPilot stays out of the device and shows the banner; the native six keys keep working.
+- **During a device write**: DialPilot quits Studio on your behalf before writing, and warns if it survives both attempts.
 
-Recommendation: remove Studio from login items so it never auto-starts alongside DialPilot.
+Recommendation: **remove Ulanzi Studio from login items** (System Settings → General → Login Items) so it never auto-starts alongside DialPilot — that is the most common cause of "plugged in but not connected" right after boot.
 
 ## Install
 
@@ -149,7 +150,7 @@ Requirements: Apple Silicon Mac, macOS 13+, Xcode Command Line Tools.
 ```sh
 git clone https://github.com/lichengwu/dialpilot.git
 cd dialpilot
-swift test --disable-sandbox        # 271 tests should pass (Core 247 + App 24)
+swift test --disable-sandbox        # 277 tests should pass (Core 252 + App 25)
 ./build-app.sh                      # artifact: .build/app/DialPilot.app
 ./scripts/make-dmg.sh               # artifact: dist/DialPilot-<version>.dmg + .sha256
 ```
@@ -245,7 +246,7 @@ DialPilot stands on the shoulders of:
 - **The Ulanzi AU05 / VibeKey hardware** — protocol facts come from HID descriptor reads on a real AU05, read-only static analysis of the Ulanzi Studio 3.3.6 `UlanziDeck` executable, and controlled on-device read/write tests. **This project does not contain, copy, load, link, or redistribute `kwdm.dylib`, `UlanziDeck`, or any vendor binary**; reverse engineering was solely for interoperability. Per-fact conclusions with confidence labels: [docs/protocol.md](docs/protocol.md).
 - Public hooks documentation of the coding agents (Claude Code, Qwen Code, Qoder, Codex, DeepSeek Harness, QwenWork) — installers follow each vendor's public contract.
 
-What DialPilot adds over its predecessor: full four-LED frame construction with range validation, an injected-clock pure render engine (all R1–R7 rules unit-tested), multi-session priority arbitration, one-click install/uninstall for seven agents (backup + additive merge + tagged uninstall), the QwenWork loopback HTTP listener, a zero-maintenance single-profile panel (auto device backup, full-screen light guide, bilingual UI, exception-only menu-bar badge, battery ring gauge, local usage stats, a self-positioning panel that survives menu-bar managers), and 271 tests (Core 247 + App 24).
+What DialPilot adds over its predecessor: full four-LED frame construction with range validation, an injected-clock pure render engine (all R1–R7 rules unit-tested), multi-session priority arbitration, one-click install/uninstall for seven agents (backup + additive merge + tagged uninstall), the QwenWork loopback HTTP listener, a zero-maintenance single-profile panel (auto device backup, full-screen light guide, bilingual UI, exception-only menu-bar badge, battery ring gauge, local usage stats, a self-positioning panel that survives menu-bar managers), and 277 tests (Core 252 + App 25).
 
 ## License & disclaimer
 

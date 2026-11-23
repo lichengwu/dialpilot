@@ -6,6 +6,37 @@ All notable changes to DialPilot are documented here. The format follows
 
 中文版：[CHANGELOG.zh.md](CHANGELOG.zh.md)
 
+## [1.1.4] — 2026-11-23
+
+The "plugged in but not connected" release. While Ulanzi Studio runs it owns
+the dial and DialPilot stands down — that part is by design; what was broken
+is that DialPilot did not always take the device back when Studio exited, and
+the panel gave you no way to act on it.
+
+### Fixed
+
+- **Automatic reconnect after Ulanzi Studio exits.** Recovery relied solely on
+  `NSWorkspace.didTerminateApplicationNotification`, which macOS can fail to
+  deliver (reproduced 2026-11-23: Studio terminated, no callback, listener
+  stayed down until an app restart). Handover is now driven by a presence
+  diff (`DialVendorPresence`) on every UI refresh plus a 30 s maintenance
+  poll; the workspace notifications remain as a fast path only.
+
+### Added
+
+- **"Quit Ulanzi Studio" banner button.** While Studio runs, the panel shows
+  an orange banner of the same severity as the permission banner, with a
+  one-click quit (graceful first, force after 4 s — same policy as the
+  write-to-device path). DialPilot reconnects automatically afterwards.
+- `DialVendorPresence` (Core, 5 tests) and a bilingual banner layout/overflow
+  regression test (App, 1 test). Suite is now 277 (Core 252 + App 25).
+
+### Changed
+
+- README ×2 and user guide ×2 spell out the three blockers (permissions ×2,
+  Studio) and recommend removing Ulanzi Studio from Login Items — the most
+  common cause of "not connected" right after boot.
+
 ## [1.1.3] — 2026-11-22
 
 Documentation and release-tooling release; no behavioural change in the app. It

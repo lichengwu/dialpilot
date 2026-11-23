@@ -24,6 +24,7 @@ final class SettingsViewController: NSViewController {
     var onLightModeChanged: ((DialLightMode) -> Void)?
     var onGrantAccessibility: (() -> Void)?
     var onGrantInputMonitoring: (() -> Void)?
+    var onQuitVendor: (() -> Void)?
     var onShowGuide: (() -> Void)?
     /// The natural content size changed. The panel host owns the window and
     /// resizes it to exactly this height — the view controller never sizes
@@ -39,6 +40,7 @@ final class SettingsViewController: NSViewController {
     private var inputMonitoringGranted = false
     private var deviceConnected = false
     private var deviceResponsive = true
+    private var vendorRunning = false
     private var powerStatus = DialPowerSnapshot()
     private var powerSaving = false
     private var hardwareSyncInProgress = false
@@ -72,6 +74,10 @@ final class SettingsViewController: NSViewController {
     private let usageCard = NSStackView()
 
     private let permissionBanner = NSStackView()
+    private let studioBanner = NSStackView()
+    private lazy var quitStudioButton = NSButton(
+        title: L10n.text(.quitStudio), target: self, action: #selector(quitStudio(_:))
+    )
     private lazy var grantAXButton = NSButton(
         title: L10n.text(.grantAccessibility), target: self, action: #selector(grantAccessibility(_:))
     )
@@ -114,6 +120,7 @@ final class SettingsViewController: NSViewController {
         statusLabel.isHidden = true
 
         buildPermissionBanner()
+        buildStudioBanner()
 
         let deviceCard = makeDeviceCard()
         let keysCard = makeKeysCard()
@@ -124,6 +131,7 @@ final class SettingsViewController: NSViewController {
             header,
             statusLabel,
             permissionBanner,
+            studioBanner,
             deviceCard,
             keysCard,
             lightsCard,
@@ -143,6 +151,7 @@ final class SettingsViewController: NSViewController {
             header.widthAnchor.constraint(equalTo: stack.widthAnchor),
             statusLabel.widthAnchor.constraint(equalTo: stack.widthAnchor),
             permissionBanner.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            studioBanner.widthAnchor.constraint(equalTo: stack.widthAnchor),
         ]
         for card in [deviceCard, keysCard, lightsCard, usageCard] {
             constraints.append(card.widthAnchor.constraint(equalTo: stack.widthAnchor))
@@ -337,6 +346,34 @@ final class SettingsViewController: NSViewController {
         permissionBanner.isHidden = true
     }
 
+    /// Same severity as the permission banner: while Ulanzi Studio runs,
+    /// DialPilot cannot own the dial at all. One click quits it; recovery is
+    /// automatic (AppDelegate.reconcileVendorPresence).
+    private func buildStudioBanner() {
+        studioBanner.orientation = .vertical
+        studioBanner.alignment = .leading
+        studioBanner.spacing = 6
+        studioBanner.edgeInsets = NSEdgeInsets(top: 8, left: 10, bottom: 8, right: 10)
+        studioBanner.wantsLayer = true
+        studioBanner.layer?.cornerRadius = 8
+        studioBanner.layer?.backgroundColor = NSColor.systemOrange.withAlphaComponent(0.10).cgColor
+        let title = NSTextField(labelWithString: L10n.text(.studioBannerTitle))
+        title.font = .systemFont(ofSize: 12, weight: .semibold)
+        title.textColor = .systemOrange
+        let body = NSTextField(wrappingLabelWithString: L10n.text(.studioBannerBody))
+        body.font = PanelTheme.captionFont
+        body.textColor = .secondaryLabelColor
+        body.maximumNumberOfLines = 2
+        quitStudioButton.bezelStyle = .rounded
+        quitStudioButton.controlSize = .small
+        quitStudioButton.identifier = NSUserInterfaceItemIdentifier("quitStudioButton")
+        quitStudioButton.setContentCompressionResistancePriority(.required, for: .horizontal)
+        studioBanner.addArrangedSubview(title)
+        studioBanner.addArrangedSubview(body)
+        studioBanner.addArrangedSubview(quitStudioButton)
+        studioBanner.isHidden = true
+    }
+
     // MARK: - Update
 
     func update(
@@ -346,6 +383,7 @@ final class SettingsViewController: NSViewController {
         inputMonitoringGranted: Bool,
         deviceConnected: Bool,
         deviceResponsive: Bool = true,
+        vendorRunning: Bool = false,
         powerStatus: DialPowerSnapshot,
         powerSaving: Bool,
         hardwareSyncInProgress: Bool,
@@ -359,6 +397,7 @@ final class SettingsViewController: NSViewController {
         self.inputMonitoringGranted = inputMonitoringGranted
         self.deviceConnected = deviceConnected
         self.deviceResponsive = deviceResponsive
+        self.vendorRunning = vendorRunning
         self.powerStatus = powerStatus
         self.powerSaving = powerSaving
         self.hardwareSyncInProgress = hardwareSyncInProgress
@@ -472,6 +511,7 @@ final class SettingsViewController: NSViewController {
         reloadNotice()
         reloadLedChip()
         reloadPermissionBanner()
+        reloadStudioBanner()
         reloadUsageCard()
     }
 
@@ -547,6 +587,16 @@ final class SettingsViewController: NSViewController {
         permissionBanner.isHidden = !missingAX && !missingIM
         grantAXButton.isHidden = !missingAX
         grantIMButton.isHidden = !missingIM
+    }
+
+    private func reloadStudioBanner() {
+        studioBanner.isHidden = !vendorRunning
+        quitStudioButton.isEnabled = !hardwareSyncInProgress
+        // The banner carries the full story; the notice line would only
+        // repeat it in two different wordings.
+        if vendorRunning, notice == L10n.text(.noticeStudioRunning) {
+            statusLabel.isHidden = true
+        }
     }
 
     private func reloadLedChip() {
@@ -721,6 +771,7 @@ final class SettingsViewController: NSViewController {
 
     @objc private func grantAccessibility(_ sender: Any?) { onGrantAccessibility?() }
     @objc private func grantInputMonitoring(_ sender: Any?) { onGrantInputMonitoring?() }
+    @objc private func quitStudio(_ sender: Any?) { onQuitVendor?() }
     @objc private func quit(_ sender: Any?) { onQuit?() }
     @objc private func showAgentHooks(_ sender: Any?) { onShowAgentHooks?() }
 }

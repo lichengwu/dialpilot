@@ -105,6 +105,10 @@ One badge at a time. Priority: absent > permission > low battery > charging > no
 - **Input Monitoring** sometimes needs an app restart — quit DialPilot and launch it again.
 - If grants keep disappearing, check whether you are building ad-hoc (see §1).
 
+### The third "cannot use it": Ulanzi Studio is running
+
+Same severity as a missing permission: while Studio owns the device, DialPilot cannot take over at all — the panel shows "not connected" plus an orange banner. Click **"Quit Ulanzi Studio"** in the banner (graceful quit, forced after 4 s); once Studio exits, DialPilot **reconnects automatically, no app restart**. The same holds if you quit Studio yourself or it crashes (within 30 s at the latest; opening the panel reconnects immediately). This is the most common cause right after boot — removing Studio from Login Items fixes it for good.
+
 ## 6. Configuration and automatic backup
 
 Config file: `~/Library/Application Support/DialPilot/config.json`
@@ -202,7 +206,9 @@ Manual items in live mode accept `s` to skip; they never auto-pass.
 | Symptom | Cause / fix |
 | --- | --- |
 | `dialpilotctl` says DialPilot is not running | App not launched or socket not ready; start it and retry after 3 s |
-| Lights completely dead | ① Ulanzi Studio running (quit it) ② device asleep (press any key; replays within 10 s) ③ three consecutive write failures suspended it (same fix) |
+| **Plugged in but shows "not connected"** | Most common cause: Ulanzi Studio running in the background (especially auto-started at login). Open the panel — an orange banner offers "Quit Ulanzi Studio"; one click and DialPilot reconnects on its own. Permanent fix: remove Studio from Login Items (System Settings → General → Login Items) |
+| No automatic reconnect after Studio quits | Bug in ≤1.1.3 (the macOS notification it relied on can be missed); since 1.1.4 presence is observed directly — reconnect within 30 s at the latest, immediately when the panel opens |
+| Lights completely dead | ① Ulanzi Studio running (use the banner button; recovery is automatic) ② device asleep (press any key; replays within 10 s) ③ three consecutive write failures suspended it (same fix) |
 | Device is off but the panel showed "connected" with an old percentage | Fixed: liveness now requires an answered power query; two silent polls show "not responding" and clear the battery |
 | Menu-bar icon turns dashed after switching the knob off | Expected: USB is enumerated but the firmware is silent, so it is treated as absent |
 | Panel in a weird spot / huge blank area | Old `NSPopover` sizing bug; the panel is now self-owned and sized to content. If it still happens, attach `debug.log` |

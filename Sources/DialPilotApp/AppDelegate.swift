@@ -42,6 +42,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var powerSaving = false
     private var hardwareSyncInProgress = false
     private var vendorInterferedDuringHardwareSync = false
+    /// Observation-based Studio presence tracking. The workspace terminate
+    /// notification proved unreliable (2026-11-23: SIGTERM'd Studio, no
+    /// resume), so every refreshUI diffs presence and recovers on exit.
+    private var vendorPresence = DialVendorPresence()
+    private var vendorQuitInFlight = false
     private var needsHardwareSync = false
     private var configurationReady = false
     private var offlineStateUnconfirmed = false
@@ -247,6 +252,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         applyLightMode(configuration.lightMode)
         let staleTimer = Timer(timeInterval: 30, repeats: true) { [weak self] _ in
             guard let self, let renderer = self.ledRenderer else { return }
+            // Cheap presence poll: if Studio exited while no device events
+            // were flowing (listener down), this is what notices and
+            // reconnects — the terminate notification alone proved unreliable.
+            // While Studio runs the listener is down by design; no refresh
+            // needed then, the banner is already up.
+            if self.vendorApplicationIsNotRunning, !self.listenerActive {
+                self.refreshUI()
+            }
             let before = self.ledSessionAggregator.activeSessionCount
             let resolved = self.ledSessionAggregator.prune(now: Date().timeIntervalSince1970)
             if resolved != renderer.state {
@@ -395,6 +408,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         settings.onGrantInputMonitoring = {
             PermissionGuide.requestInputMonitoring()
+        }
+        settings.onQuitVendor = { [weak self] in
+            self?.quitVendorApplication()
         }
         settings.onShowGuide = { [weak self] in
             self?.showGuideWindow()
@@ -600,19 +616,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.resumeAfterUserActivityIfNeeded()
         })
 
+        // Studio launch/terminate notifications are a fast path only — the
+        // authoritative handover is the presence diff in refreshUI
+        // (reconcileVendorPresence), because these notifications can be
+        // missed (observed 2026-11-23). refreshUI is idempotent here.
         workspaceObservers.append(center.addObserver(
             forName: NSWorkspace.didLaunchApplicationNotification,
             object: nil,
             queue: .main
         ) { [weak self] notification in
             guard Self.isVendorApplication(notification) else { return }
-            if self?.hardwareSyncInProgress == true {
-                self?.vendorInterferedDuringHardwareSync = true
-            }
-            self?.ledRenderer?.suspendForVendor()
-            self?.stopEnhancedMode(
-                notice: L10n.text(.noticeStudioOpened)
-            )
+            self?.refreshUI()
         })
 
         workspaceObservers.append(center.addObserver(
@@ -621,8 +635,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             queue: .main
         ) { [weak self] notification in
             guard Self.isVendorApplication(notification) else { return }
-            self?.resumeEnhancedModeIfSafe()
-            self?.ledRenderer?.resume()
+            self?.refreshUI()
         })
     }
 
@@ -802,6 +815,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             listenerActive = true
             DebugLog.log("startHardwareListener: listener started OK")
             if notice == L10n.text(.noticeNeedAccessibility)
+                || notice == L10n.text(.noticeStudioRunning)
+                || notice == L10n.text(.noticeStudioOpened)
                 || notice?.hasPrefix(L10n.text(.noticeListenFailed)) == true {
                 notice = nil
             }
@@ -1239,6 +1254,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func refreshUI() {
+        let vendorRunning = !vendorApplicationIsNotRunning
+        reconcileVendorPresence(running: vendorRunning)
         refreshStatusItem()
         settingsViewController?.update(
             configuration: configuration,
@@ -1247,6 +1264,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             inputMonitoringGranted: IOHIDListenAccess.isGranted,
             deviceConnected: deviceConnected,
             deviceResponsive: deviceResponsive,
+            vendorRunning: vendorRunning,
             powerStatus: devicePowerStatus,
             powerSaving: powerSaving,
             hardwareSyncInProgress: hardwareSyncInProgress,
@@ -1262,6 +1280,68 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // (or the icon was hidden entirely), the panel follows or closes
         // instead of hovering in the wrong place.
         panelController?.repositionIfNeeded()
+    }
+
+    /// Observation-based Studio handover. Runs on every refreshUI (device
+    /// events, panel open, the 30 s maintenance timer), so recovery does not
+    /// depend on the workspace terminate notification being delivered —
+    /// 2026-11-23 proved it can be missed entirely.
+    private func reconcileVendorPresence(running: Bool) {
+        switch vendorPresence.observe(running: running) {
+        case .unchanged:
+            break
+        case .appeared:
+            DebugLog.log("vendor: Ulanzi Studio appeared; standing down")
+            if hardwareSyncInProgress {
+                vendorInterferedDuringHardwareSync = true
+            }
+            ledRenderer?.suspendForVendor()
+            stopEnhancedMode(notice: L10n.text(.noticeStudioOpened))
+        case .exited:
+            DebugLog.log("vendor: Ulanzi Studio exited; resuming")
+            resumeEnhancedModeIfSafe()
+            ledRenderer?.resume()
+        }
+    }
+
+    /// One-click Studio quit from the panel banner. Graceful first, force
+    /// after 4 s — same policy as the write-to-device path, minus the sync.
+    /// Recovery itself happens via reconcileVendorPresence on the next
+    /// refreshUI tick, not here.
+    private func quitVendorApplication() {
+        guard !vendorQuitInFlight,
+              let vendor = NSRunningApplication.runningApplications(
+                  withBundleIdentifier: Self.vendorBundleIdentifier
+              ).first else { return }
+        vendorQuitInFlight = true
+        notice = L10n.text(.noticeStudioQuitting)
+        refreshUI()
+        vendor.terminate()
+
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            var deadline = Date().addingTimeInterval(4)
+            while Date() < deadline, !vendor.isTerminated {
+                Thread.sleep(forTimeInterval: 0.1)
+            }
+            if !vendor.isTerminated {
+                vendor.forceTerminate()
+                deadline = Date().addingTimeInterval(2)
+                while Date() < deadline, !vendor.isTerminated {
+                    Thread.sleep(forTimeInterval: 0.1)
+                }
+            }
+            let exited = vendor.isTerminated
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.vendorQuitInFlight = false
+                DebugLog.log("vendor: quit requested by user; exited=\(exited)")
+                if !exited {
+                    self.notice = L10n.text(.noticeStudioNotQuit)
+                }
+                // Diff presence and resume (or keep the banner) right away.
+                self.refreshUI()
+            }
+        }
     }
 
     private func refreshStatusItem() {

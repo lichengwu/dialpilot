@@ -54,6 +54,8 @@ public enum L10n {
         // Permission banner
         case permissionTitle, permissionBody
         case grantAccessibility, grantInputMonitoring, openSettings
+        // Vendor-app banner
+        case studioBannerTitle, studioBannerBody, quitStudio
         // Buttons
         case quit, connectAgent
         // Light modes
@@ -166,6 +168,11 @@ public enum L10n {
             case .grantAccessibility: return Pair("Grant Accessibility", "授权辅助使用")
             case .grantInputMonitoring: return Pair("Grant Input Monitoring", "授权输入监控")
             case .openSettings: return Pair("Open Settings", "打开系统设置")
+            case .studioBannerTitle: return Pair("Ulanzi Studio is running", "Ulanzi Studio 正在运行")
+            case .studioBannerBody: return Pair(
+                "It owns the dial while running; DialPilot reconnects automatically once it quits.",
+                "它运行时独占旋钮；退出后 DialPilot 会自动接回。")
+            case .quitStudio: return Pair("Quit Ulanzi Studio", "退出 Ulanzi Studio")
             case .quit: return Pair("Quit", "退出")
             case .connectAgent: return Pair("Connect Agent…", "接入 Agent…")
             case .lightModeAllOn: return Pair("All On", "全开")
@@ -351,8 +358,8 @@ public enum L10n {
                 "Native six keys still work; allow Accessibility to enable double-press and long-press.",
                 "原生六键仍可用；允许「辅助使用」后，双按与长按才会启用。")
             case .noticeStudioRunning: return Pair(
-                "Ulanzi Studio is running and owns the keys. Write to Device will quit it and write.",
-                "Ulanzi Studio 正在运行，按键由它接管。点「写入设备」会自动退出它并写入。")
+                "Ulanzi Studio is running and owns the dial. Use \"Quit Ulanzi Studio\" above; DialPilot reconnects automatically.",
+                "Ulanzi Studio 正在运行，旋钮由它接管。点上方「退出 Ulanzi Studio」，DialPilot 会自动接回。")
             case .noticeGestureInvalid: return Pair(
                 "Native six keys still work; advanced gesture config invalid: ",
                 "原生六键仍可用；进阶手势设置无效：")

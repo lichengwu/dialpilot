@@ -6,6 +6,33 @@
 
 English: [CHANGELOG.md](CHANGELOG.md)
 
+## [1.1.4] — 2026-11-23
+
+「插着却显示未连接」版本。Ulanzi Studio 运行时独占旋钮、DialPilot 主动让位——
+这本身是设计；坏的是 Studio 退出后 DialPilot 不一定接得回来，而且面板没给
+用户任何可操作的入口。
+
+### 修复
+
+- **Studio 退出后自动接回。** 原实现只依赖
+  `NSWorkspace.didTerminateApplicationNotification`，而这个通知 macOS 可能
+  不投递（2026-11-23 复现：Studio 已退出、无回调、监听一直停着直到重启 App）。
+  现在交接由每次 UI 刷新时的存在状态差分（`DialVendorPresence`）+ 30 秒
+  维护轮询驱动；系统通知只作为快路径保留。
+
+### 新增
+
+- **「退出 Ulanzi Studio」横幅按钮。** Studio 运行时面板显示与权限横幅同级的
+  橙色横幅，一键退出（先优雅退出，4 秒不退强制——与写入设备路径同一策略）。
+  退出后 DialPilot 自动接回。
+- `DialVendorPresence`（Core，5 条测试）与中英双语横幅布局/溢出回归测试
+  （App，1 条）。测试总数 277（Core 252 + App 25）。
+
+### 变更
+
+- README ×2 与用户指南 ×2 写清三种「用不了」（两项权限 + Studio），并建议
+  把 Ulanzi Studio 从登录项移除——这是开机后「未连接」最常见的原因。
+
 ## [1.1.3] — 2026-11-22
 
 文档与发版工具版本，App 行为无变化。但它带着**新的 ad-hoc 签名身份**，所以升级

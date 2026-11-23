@@ -6,7 +6,7 @@
 [![macOS 13+](https://img.shields.io/badge/macOS-13%2B-lightgrey.svg)](https://www.apple.com/macos/)
 [![Apple Silicon](https://img.shields.io/badge/Apple%20Silicon-arm64-orange.svg)](https://support.apple.com/en-us/116943)
 [![Swift 5.9+](https://img.shields.io/badge/Swift-5.9%2B-F05138.svg)](https://swift.org)
-[![Tests](https://img.shields.io/badge/tests-271%20passing-brightgreen.svg)](#安装)
+[![Tests](https://img.shields.io/badge/tests-277%20passing-brightgreen.svg)](#安装)
 [![Dependencies](https://img.shields.io/badge/dependencies-0-brightgreen.svg)](Package.swift)
 
 [English](README.md)（默认文档）
@@ -99,13 +99,14 @@ DialPilot 不需要你在 Studio 里做账号绑定或按键映射——首次�
 
 ### 保持 Ulanzi Studio 关闭
 
-两个宿主不能同时驱动 AU05。DialPilot 的防御性处理：
+两个宿主不能同时驱动 AU05——**Studio 运行时，即使旋钮插着，DialPilot 也会显示「未连接」**。这是交接机制在起作用，不是线坏了。DialPilot 全程自动处理：
 
-- **启动时**：Studio 在运行，DialPilot 不接管设备并提示你；原生六键照常可用。
-- **写入设备时**：Studio 在运行，DialPilot 会代你退出它（先礼后兵：优雅退出，4 秒不退再强制），然后才写入；两者都失败会警告。
-- **运行中 Studio 被打开**：DialPilot 立即把设备交还原生模式并恢复灯光基线；Studio 退出后自动重连。
+- **Studio 运行时面板会出现横幅 +「退出 Ulanzi Studio」按钮**——和权限缺失横幅同级。点一下即退出它（先优雅退出，4 秒不退再强制）。
+- **自动接回**：Studio 退出后——不管是按钮点的、你手动关的还是它自己崩了——DialPilot 都会自己接管设备，无需重启 App。接回靠的是每次 UI 刷新时对 Studio 存在状态的观察，不依赖 macOS 的启动/退出通知（通知可能丢失，这是 1.1.4 修掉的一个真实 bug）。
+- **启动时**：Studio 已在运行，DialPilot 不接管设备并显示横幅；原生六键照常可用。
+- **写入设备时**：DialPilot 会先代你退出 Studio 再写入；两种方式都失败会警告。
 
-建议：把 Studio 从登录项里移除，避免它和 DialPilot 一起自启。
+建议：**把 Ulanzi Studio 从登录项移除**（系统设置 → 通用 → 登录项），避免它和 DialPilot 一起自启——这是开机后「插着却显示未连接」最常见的原因。
 
 ## 安装
 
@@ -150,7 +151,7 @@ curl -fsSL https://raw.githubusercontent.com/lichengwu/dialpilot/main/scripts/in
 ```sh
 git clone https://github.com/lichengwu/dialpilot.git
 cd dialpilot
-swift test --disable-sandbox        # 271 个测试应全绿（Core 247 + App 24）
+swift test --disable-sandbox        # 277 个测试应全绿（Core 252 + App 25）
 ./build-app.sh                      # 产物 .build/app/DialPilot.app
 ./scripts/make-dmg.sh               # 产物 dist/DialPilot-<version>.dmg + .sha256
 ```
@@ -243,7 +244,7 @@ DialPilot 站在这些项目的肩膀上：
 - **Ulanzi AU05 / VibeKey 硬件**——协议事实来自对一台真实 AU05 的 HID 描述符读取、只读静态分析（Ulanzi Studio 3.3.6 的 `UlanziDeck` 可执行文件）与受控真机读写测试。**本项目不包含、不复制、不加载、不链接、不再分发 `kwdm.dylib`、`UlanziDeck` 或任何厂商二进制**；逆向仅以互操作为目的。逐条结论与置信度标注见 [docs/protocol.md](docs/protocol.md)。
 - 各 coding Agent 的公开 hooks 文档（Claude Code、Qwen Code、Qoder、Codex、DeepSeek Harness、千问办公）——安装器按各家公开契约实现。
 
-DialPilot 相对前身的增量：全量四灯帧构造与值域校验、注入时钟的纯逻辑渲染引擎（R1–R7 规则全单测）、多会话优先级仲裁、七家 Agent 一键安装/卸载（备份+只增不删+标记卸载）、QwenWork 回环 HTTP 监听、零维护单组面板（设备自动备份、全屏灯效图解、双语界面、菜单栏异常徽章、电量环形仪表、本地使用统计、不怕菜单栏管理工具的自定位面板）、271 个测试（Core 247 + App 24）。
+DialPilot 相对前身的增量：全量四灯帧构造与值域校验、注入时钟的纯逻辑渲染引擎（R1–R7 规则全单测）、多会话优先级仲裁、七家 Agent 一键安装/卸载（备份+只增不删+标记卸载）、QwenWork 回环 HTTP 监听、零维护单组面板（设备自动备份、全屏灯效图解、双语界面、菜单栏异常徽章、电量环形仪表、本地使用统计、不怕菜单栏管理工具的自定位面板）、277 个测试（Core 252 + App 25）。
 
 ## 许可与声明
 
