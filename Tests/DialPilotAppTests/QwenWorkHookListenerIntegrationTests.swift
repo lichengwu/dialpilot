@@ -36,6 +36,9 @@ final class QwenWorkHookListenerIntegrationTests: XCTestCase {
             using: .tcp
         )
         let done = expectation(description: "response")
+        // CI runners (fresh macOS images) can stall the first NWConnection
+        // (local-network privacy machinery); 5 s proved too tight and flaky
+        // there. The listener itself answers in milliseconds.
         connection.stateUpdateHandler = { state in
             if state == .ready {
                 connection.send(content: Data(text.utf8), completion: .contentProcessed { _ in })
@@ -46,7 +49,7 @@ final class QwenWorkHookListenerIntegrationTests: XCTestCase {
             }
         }
         connection.start(queue: .main)
-        wait(for: [done], timeout: 5)
+        wait(for: [done], timeout: 20)
         connection.cancel()
         return response
     }
